@@ -58,22 +58,25 @@ pub use super::kvstore::{
 ///
 /// `Acquired<T>` implements `Deref` and `DerefMut`, allowing transparent access
 /// to the inner value's methods and fields.
+///
+/// # Construction
+///
+/// Only [`AcquireTransaction`] builds this type, from rows a [`LockingTransaction`]
+/// backend has locked. Backends implement [`LockingTransaction`] and get
+/// [`AcquireTransaction`] through a blanket impl.
 #[derive(Debug)]
 pub struct Acquired<T> {
     inner: T,
 }
 
-impl<T> From<T> for Acquired<T> {
-    /// Wraps a value to indicate it has been acquired with a lock.
-    ///
-    /// This is typically called by database layer implementations after
-    /// executing a locking query.
-    fn from(value: T) -> Self {
-        Acquired { inner: value }
-    }
-}
-
 impl<T> Acquired<T> {
+    /// Wraps rows locked by the current transaction.
+    ///
+    /// Private so that only [`AcquireTransaction`] can call it.
+    fn new(value: T) -> Self {
+        Self { inner: value }
+    }
+
     /// Consumes the wrapper and returns the inner resource.
     ///
     /// Use this when you need to take ownership of the inner value,
@@ -113,7 +116,7 @@ pub struct MeltRequestInfo {
 
 /// Result of locking a melt quote and all related quotes atomically.
 ///
-/// This struct is returned by [`QuotesTransaction::lock_melt_quote_and_related`]
+/// This struct is returned by [`AcquireTransaction::lock_melt_quote_and_related`]
 /// and contains both the target quote and all quotes sharing the same `request_lookup_id`.
 #[derive(Debug)]
 pub struct LockedMeltQuotes {
@@ -121,6 +124,329 @@ pub struct LockedMeltQuotes {
     pub target: Option<Acquired<MeltQuote>>,
     /// All quotes sharing the same `request_lookup_id` (including the target)
     pub all_related: Vec<Acquired<MeltQuote>>,
+}
+
+/// Queries that lock rows for the rest of the transaction, implemented by database backends.
+///
+/// Each method locks the rows it touches, either with a locking read (e.g.,
+/// `SELECT ... FOR UPDATE`) or by inserting them. Callers use [`AcquireTransaction`] instead,
+/// which is implemented for every `LockingTransaction` and wraps the locked rows in
+/// [`Acquired`]. Backends can't build an [`Acquired`] themselves.
+#[async_trait]
+pub trait LockingTransaction {
+    /// Mint Database Error
+    type Err: Into<Error> + From<Error>;
+
+    /// Lock the [`MintMintQuote`] with this ID
+    async fn lock_mint_quote(
+        &mut self,
+        quote_id: &QuoteId,
+    ) -> Result<Option<MintMintQuote>, Self::Err>;
+
+    /// Lock the [`MintMintQuote`]s with these IDs
+    ///
+    /// Returns results in the same order as the input IDs, with `None` for any IDs not found.
+    async fn lock_mint_quotes_by_ids(
+        &mut self,
+        quote_ids: &[QuoteId],
+    ) -> Result<Vec<Option<MintMintQuote>>, Self::Err>;
+
+    /// Insert a [`MintMintQuote`]
+    async fn insert_mint_quote(&mut self, quote: &MintMintQuote) -> Result<(), Self::Err>;
+
+    /// Lock the [`mint::MeltQuote`] with this ID
+    async fn lock_melt_quote(
+        &mut self,
+        quote_id: &QuoteId,
+    ) -> Result<Option<mint::MeltQuote>, Self::Err>;
+
+    /// Lock every [`mint::MeltQuote`] matching a payment lookup identifier
+    async fn lock_melt_quotes_by_request_lookup_id(
+        &mut self,
+        request_lookup_id: &PaymentIdentifier,
+    ) -> Result<Vec<MeltQuote>, Self::Err>;
+
+    /// Lock a melt quote and every quote sharing its `request_lookup_id`
+    ///
+    /// Returns every locked quote, including the target. All locks must be taken in a single
+    /// query ordered by quote ID, see [`AcquireTransaction::lock_melt_quote_and_related`].
+    async fn lock_related_melt_quotes(
+        &mut self,
+        quote_id: &QuoteId,
+    ) -> Result<Vec<MeltQuote>, Self::Err>;
+
+    /// Lock the [`MintMintQuote`] for this payment request
+    async fn lock_mint_quote_by_request(
+        &mut self,
+        request: &str,
+    ) -> Result<Option<MintMintQuote>, Self::Err>;
+
+    /// Lock the [`MintMintQuote`] for this payment lookup identifier
+    async fn lock_mint_quote_by_request_lookup_id(
+        &mut self,
+        request_lookup_id: &PaymentIdentifier,
+    ) -> Result<Option<MintMintQuote>, Self::Err>;
+
+    /// Insert [`Proofs`] as unspent
+    ///
+    /// Errors with `AttemptUpdateSpentProof` if a proof is already spent, or `Duplicate` if it
+    /// already exists in any other state.
+    async fn insert_proofs(
+        &mut self,
+        proofs: &Proofs,
+        quote_id: Option<QuoteId>,
+        operation: &Operation,
+    ) -> Result<(), Self::Err>;
+
+    /// Lock the proofs with these Ys
+    async fn lock_proofs(&mut self, ys: &[PublicKey]) -> Result<ProofsWithState, Self::Err>;
+
+    /// Lock the [`mint::Saga`] for this operation
+    async fn lock_saga(
+        &mut self,
+        operation_id: &uuid::Uuid,
+    ) -> Result<Option<mint::Saga>, Self::Err>;
+}
+
+/// Queries that return rows locked by the current transaction as [`Acquired`].
+///
+/// Implemented for every [`LockingTransaction`], and the only place that builds an
+/// [`Acquired`].
+#[async_trait]
+pub trait AcquireTransaction {
+    /// Mint Database Error
+    type Err: Into<Error> + From<Error>;
+
+    /// Get [`MintMintQuote`] and lock it for update in this transaction
+    async fn get_mint_quote(
+        &mut self,
+        quote_id: &QuoteId,
+    ) -> Result<Option<Acquired<MintMintQuote>>, Self::Err>;
+
+    /// Get multiple [`MintMintQuote`]s by their IDs and lock them for update in this transaction.
+    ///
+    /// Returns results in the same order as the input IDs, with `None` for any IDs not found.
+    /// This method locks all found quotes to prevent race conditions during concurrent modifications.
+    async fn get_mint_quotes_by_ids(
+        &mut self,
+        quote_ids: &[QuoteId],
+    ) -> Result<Vec<Option<Acquired<MintMintQuote>>>, Self::Err>;
+
+    /// Add [`MintMintQuote`]
+    async fn add_mint_quote(
+        &mut self,
+        quote: MintMintQuote,
+    ) -> Result<Acquired<MintMintQuote>, Self::Err>;
+
+    /// Get [`mint::MeltQuote`] and lock it for update in this transaction
+    async fn get_melt_quote(
+        &mut self,
+        quote_id: &QuoteId,
+    ) -> Result<Option<Acquired<mint::MeltQuote>>, Self::Err>;
+
+    /// Retrieves all melt quotes matching a payment lookup identifier and locks them for update.
+    ///
+    /// This method returns multiple quotes because certain payment methods (notably BOLT12 offers)
+    /// can generate multiple payment attempts that share the same lookup identifier. Locking all
+    /// related quotes prevents race conditions where concurrent melt operations could interfere
+    /// with each other, potentially leading to double-spending or state inconsistencies.
+    ///
+    /// The returned quotes are locked within the current transaction to ensure safe concurrent
+    /// modification. This is essential during melt saga initiation and finalization to guarantee
+    /// atomic state transitions across all related quotes.
+    ///
+    /// # Arguments
+    ///
+    /// * `request_lookup_id` - The payment identifier used by the payment backend to track
+    ///   payment state (e.g., payment hash, offer ID, or label).
+    async fn get_melt_quotes_by_request_lookup_id(
+        &mut self,
+        request_lookup_id: &PaymentIdentifier,
+    ) -> Result<Vec<Acquired<MeltQuote>>, Self::Err>;
+
+    /// Locks a melt quote and all related quotes sharing the same request_lookup_id atomically.
+    ///
+    /// This method prevents deadlocks by acquiring all locks in a single query with consistent
+    /// ordering, rather than locking the target quote first and then related quotes separately.
+    ///
+    /// # Deadlock Prevention
+    ///
+    /// When multiple transactions try to melt quotes sharing the same `request_lookup_id`,
+    /// acquiring locks in two steps (first the target quote, then all related quotes) can cause
+    /// circular wait deadlocks. This method avoids that by:
+    /// 1. Using a subquery to find the `request_lookup_id` for the target quote
+    /// 2. Locking ALL quotes with that `request_lookup_id` in one atomic operation
+    /// 3. Ordering locks consistently by quote ID
+    ///
+    /// # Arguments
+    ///
+    /// * `quote_id` - The ID of the target melt quote
+    ///
+    /// # Returns
+    ///
+    /// A [`LockedMeltQuotes`] containing:
+    /// - `target`: The target quote (if found)
+    /// - `all_related`: All quotes sharing the same `request_lookup_id` (including the target)
+    ///
+    /// If the quote has no `request_lookup_id`, only the target quote is returned and locked.
+    async fn lock_melt_quote_and_related(
+        &mut self,
+        quote_id: &QuoteId,
+    ) -> Result<LockedMeltQuotes, Self::Err>;
+
+    /// Get all [`MintMintQuote`]s and lock it for update in this transaction
+    async fn get_mint_quote_by_request(
+        &mut self,
+        request: &str,
+    ) -> Result<Option<Acquired<MintMintQuote>>, Self::Err>;
+
+    /// Get all [`MintMintQuote`]s
+    async fn get_mint_quote_by_request_lookup_id(
+        &mut self,
+        request_lookup_id: &PaymentIdentifier,
+    ) -> Result<Option<Acquired<MintMintQuote>>, Self::Err>;
+
+    /// Add  [`Proofs`]
+    ///
+    /// Adds proofs to the database. The database should error if the proof already exits, with a
+    /// `AttemptUpdateSpentProof` if the proof is already spent or a `Duplicate` error otherwise.
+    async fn add_proofs(
+        &mut self,
+        proof: Proofs,
+        quote_id: Option<QuoteId>,
+        operation: &Operation,
+    ) -> Result<Acquired<ProofsWithState>, Self::Err>;
+
+    /// get proofs states
+    async fn get_proofs(
+        &mut self,
+        ys: &[PublicKey],
+    ) -> Result<Acquired<ProofsWithState>, Self::Err>;
+
+    /// Get a saga by operation ID and mark it as acquired for mutation.
+    ///
+    /// Implementations must lock the returned row for the lifetime of the
+    /// transaction. Saga mutation methods require this marker so callers
+    /// cannot update a stale snapshot loaded outside the transaction.
+    async fn get_saga_for_update(
+        &mut self,
+        operation_id: &uuid::Uuid,
+    ) -> Result<Option<Acquired<mint::Saga>>, Self::Err>;
+}
+
+#[async_trait]
+impl<T> AcquireTransaction for T
+where
+    T: LockingTransaction + Send,
+{
+    type Err = T::Err;
+
+    async fn get_mint_quote(
+        &mut self,
+        quote_id: &QuoteId,
+    ) -> Result<Option<Acquired<MintMintQuote>>, Self::Err> {
+        Ok(self.lock_mint_quote(quote_id).await?.map(Acquired::new))
+    }
+
+    async fn get_mint_quotes_by_ids(
+        &mut self,
+        quote_ids: &[QuoteId],
+    ) -> Result<Vec<Option<Acquired<MintMintQuote>>>, Self::Err> {
+        Ok(self
+            .lock_mint_quotes_by_ids(quote_ids)
+            .await?
+            .into_iter()
+            .map(|quote| quote.map(Acquired::new))
+            .collect())
+    }
+
+    async fn add_mint_quote(
+        &mut self,
+        quote: MintMintQuote,
+    ) -> Result<Acquired<MintMintQuote>, Self::Err> {
+        self.insert_mint_quote(&quote).await?;
+        Ok(Acquired::new(quote))
+    }
+
+    async fn get_melt_quote(
+        &mut self,
+        quote_id: &QuoteId,
+    ) -> Result<Option<Acquired<mint::MeltQuote>>, Self::Err> {
+        Ok(self.lock_melt_quote(quote_id).await?.map(Acquired::new))
+    }
+
+    async fn get_melt_quotes_by_request_lookup_id(
+        &mut self,
+        request_lookup_id: &PaymentIdentifier,
+    ) -> Result<Vec<Acquired<MeltQuote>>, Self::Err> {
+        Ok(self
+            .lock_melt_quotes_by_request_lookup_id(request_lookup_id)
+            .await?
+            .into_iter()
+            .map(Acquired::new)
+            .collect())
+    }
+
+    async fn lock_melt_quote_and_related(
+        &mut self,
+        quote_id: &QuoteId,
+    ) -> Result<LockedMeltQuotes, Self::Err> {
+        let all_related = self.lock_related_melt_quotes(quote_id).await?;
+        let target = all_related
+            .iter()
+            .find(|quote| &quote.id == quote_id)
+            .cloned()
+            .map(Acquired::new);
+
+        Ok(LockedMeltQuotes {
+            target,
+            all_related: all_related.into_iter().map(Acquired::new).collect(),
+        })
+    }
+
+    async fn get_mint_quote_by_request(
+        &mut self,
+        request: &str,
+    ) -> Result<Option<Acquired<MintMintQuote>>, Self::Err> {
+        Ok(self
+            .lock_mint_quote_by_request(request)
+            .await?
+            .map(Acquired::new))
+    }
+
+    async fn get_mint_quote_by_request_lookup_id(
+        &mut self,
+        request_lookup_id: &PaymentIdentifier,
+    ) -> Result<Option<Acquired<MintMintQuote>>, Self::Err> {
+        Ok(self
+            .lock_mint_quote_by_request_lookup_id(request_lookup_id)
+            .await?
+            .map(Acquired::new))
+    }
+
+    async fn add_proofs(
+        &mut self,
+        proofs: Proofs,
+        quote_id: Option<QuoteId>,
+        operation: &Operation,
+    ) -> Result<Acquired<ProofsWithState>, Self::Err> {
+        self.insert_proofs(&proofs, quote_id, operation).await?;
+        Ok(Acquired::new(ProofsWithState::new(proofs, State::Unspent)))
+    }
+
+    async fn get_proofs(
+        &mut self,
+        ys: &[PublicKey],
+    ) -> Result<Acquired<ProofsWithState>, Self::Err> {
+        Ok(Acquired::new(self.lock_proofs(ys).await?))
+    }
+
+    async fn get_saga_for_update(
+        &mut self,
+        operation_id: &uuid::Uuid,
+    ) -> Result<Option<Acquired<mint::Saga>>, Self::Err> {
+        Ok(self.lock_saga(operation_id).await?.map(Acquired::new))
+    }
 }
 
 /// KeysDatabaseWriter
@@ -241,27 +567,6 @@ pub trait QuotesTransaction {
     /// Delete melt_request and associated blinded_messages by quote_id
     async fn delete_melt_request(&mut self, quote_id: &QuoteId) -> Result<(), Self::Err>;
 
-    /// Get [`MintMintQuote`] and lock it for update in this transaction
-    async fn get_mint_quote(
-        &mut self,
-        quote_id: &QuoteId,
-    ) -> Result<Option<Acquired<MintMintQuote>>, Self::Err>;
-
-    /// Get multiple [`MintMintQuote`]s by their IDs and lock them for update in this transaction.
-    ///
-    /// Returns results in the same order as the input IDs, with `None` for any IDs not found.
-    /// This method locks all found quotes to prevent race conditions during concurrent modifications.
-    async fn get_mint_quotes_by_ids(
-        &mut self,
-        quote_ids: &[QuoteId],
-    ) -> Result<Vec<Option<Acquired<MintMintQuote>>>, Self::Err>;
-
-    /// Add [`MintMintQuote`]
-    async fn add_mint_quote(
-        &mut self,
-        quote: MintMintQuote,
-    ) -> Result<Acquired<MintMintQuote>, Self::Err>;
-
     /// Persists any pending changes made to the mint quote.
     ///
     /// This method extracts changes accumulated in the quote (via [`mint::MintQuote::take_changes`])
@@ -286,64 +591,8 @@ pub trait QuotesTransaction {
         quote: &mut Acquired<mint::MintQuote>,
     ) -> Result<(), Self::Err>;
 
-    /// Get [`mint::MeltQuote`] and lock it for update in this transaction
-    async fn get_melt_quote(
-        &mut self,
-        quote_id: &QuoteId,
-    ) -> Result<Option<Acquired<mint::MeltQuote>>, Self::Err>;
-
     /// Add [`mint::MeltQuote`]
     async fn add_melt_quote(&mut self, quote: mint::MeltQuote) -> Result<(), Self::Err>;
-
-    /// Retrieves all melt quotes matching a payment lookup identifier and locks them for update.
-    ///
-    /// This method returns multiple quotes because certain payment methods (notably BOLT12 offers)
-    /// can generate multiple payment attempts that share the same lookup identifier. Locking all
-    /// related quotes prevents race conditions where concurrent melt operations could interfere
-    /// with each other, potentially leading to double-spending or state inconsistencies.
-    ///
-    /// The returned quotes are locked within the current transaction to ensure safe concurrent
-    /// modification. This is essential during melt saga initiation and finalization to guarantee
-    /// atomic state transitions across all related quotes.
-    ///
-    /// # Arguments
-    ///
-    /// * `request_lookup_id` - The payment identifier used by the payment backend to track
-    ///   payment state (e.g., payment hash, offer ID, or label).
-    async fn get_melt_quotes_by_request_lookup_id(
-        &mut self,
-        request_lookup_id: &PaymentIdentifier,
-    ) -> Result<Vec<Acquired<MeltQuote>>, Self::Err>;
-
-    /// Locks a melt quote and all related quotes sharing the same request_lookup_id atomically.
-    ///
-    /// This method prevents deadlocks by acquiring all locks in a single query with consistent
-    /// ordering, rather than locking the target quote first and then related quotes separately.
-    ///
-    /// # Deadlock Prevention
-    ///
-    /// When multiple transactions try to melt quotes sharing the same `request_lookup_id`,
-    /// acquiring locks in two steps (first the target quote, then all related quotes) can cause
-    /// circular wait deadlocks. This method avoids that by:
-    /// 1. Using a subquery to find the `request_lookup_id` for the target quote
-    /// 2. Locking ALL quotes with that `request_lookup_id` in one atomic operation
-    /// 3. Ordering locks consistently by quote ID
-    ///
-    /// # Arguments
-    ///
-    /// * `quote_id` - The ID of the target melt quote
-    ///
-    /// # Returns
-    ///
-    /// A [`LockedMeltQuotes`] containing:
-    /// - `target`: The target quote (if found)
-    /// - `all_related`: All quotes sharing the same `request_lookup_id` (including the target)
-    ///
-    /// If the quote has no `request_lookup_id`, only the target quote is returned and locked.
-    async fn lock_melt_quote_and_related(
-        &mut self,
-        quote_id: &QuoteId,
-    ) -> Result<LockedMeltQuotes, Self::Err>;
 
     /// Updates the request lookup id for a melt quote.
     ///
@@ -364,18 +613,6 @@ pub trait QuotesTransaction {
         new_state: MeltQuoteState,
         payment_proof: Option<String>,
     ) -> Result<MeltQuoteState, Self::Err>;
-
-    /// Get all [`MintMintQuote`]s and lock it for update in this transaction
-    async fn get_mint_quote_by_request(
-        &mut self,
-        request: &str,
-    ) -> Result<Option<Acquired<MintMintQuote>>, Self::Err>;
-
-    /// Get all [`MintMintQuote`]s
-    async fn get_mint_quote_by_request_lookup_id(
-        &mut self,
-        request_lookup_id: &PaymentIdentifier,
-    ) -> Result<Option<Acquired<MintMintQuote>>, Self::Err>;
 }
 
 /// Mint Quote Database trait
@@ -433,17 +670,6 @@ pub trait ProofsTransaction {
     /// Mint Proof Database Error
     type Err: Into<Error> + From<Error>;
 
-    /// Add  [`Proofs`]
-    ///
-    /// Adds proofs to the database. The database should error if the proof already exits, with a
-    /// `AttemptUpdateSpentProof` if the proof is already spent or a `Duplicate` error otherwise.
-    async fn add_proofs(
-        &mut self,
-        proof: Proofs,
-        quote_id: Option<QuoteId>,
-        operation: &Operation,
-    ) -> Result<Acquired<ProofsWithState>, Self::Err>;
-
     /// Updates the proofs to the given state in the database.
     ///
     /// Also updates the `state` field on the [`ProofsWithState`] wrapper to reflect
@@ -453,12 +679,6 @@ pub trait ProofsTransaction {
         proofs: &mut Acquired<ProofsWithState>,
         new_state: State,
     ) -> Result<(), Self::Err>;
-
-    /// get proofs states
-    async fn get_proofs(
-        &mut self,
-        ys: &[PublicKey],
-    ) -> Result<Acquired<ProofsWithState>, Self::Err>;
 
     /// Remove [`Proofs`]
     async fn remove_proofs(
@@ -579,16 +799,6 @@ pub trait SagaTransaction {
         operation_id: &uuid::Uuid,
     ) -> Result<Option<mint::Saga>, Self::Err>;
 
-    /// Get a saga by operation ID and mark it as acquired for mutation.
-    ///
-    /// Implementations must lock the returned row for the lifetime of the
-    /// transaction. Saga mutation methods require this marker so callers
-    /// cannot update a stale snapshot loaded outside the transaction.
-    async fn get_saga_for_update(
-        &mut self,
-        operation_id: &uuid::Uuid,
-    ) -> Result<Option<Acquired<mint::Saga>>, Self::Err>;
-
     /// Add saga
     async fn add_saga(&mut self, saga: &mint::Saga) -> Result<(), Self::Err>;
 
@@ -681,6 +891,7 @@ pub trait Transaction<Error>:
     + KVStoreTransaction<Error>
     + SagaTransaction<Err = Error>
     + CompletedOperationsTransaction<Err = Error>
+    + AcquireTransaction<Err = Error>
 {
     /// Lock a set of quote identifiers for this transaction.
     ///
