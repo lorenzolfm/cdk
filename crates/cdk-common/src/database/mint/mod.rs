@@ -58,22 +58,27 @@ pub use super::kvstore::{
 ///
 /// `Acquired<T>` implements `Deref` and `DerefMut`, allowing transparent access
 /// to the inner value's methods and fields.
+///
+/// # Construction
+///
+/// Only database backends construct this type, through [`Acquired::from_locked`].
+/// The workspace `clippy.toml` disallows that constructor everywhere else.
 #[derive(Debug)]
 pub struct Acquired<T> {
     inner: T,
 }
 
-impl<T> From<T> for Acquired<T> {
-    /// Wraps a value to indicate it has been acquired with a lock.
-    ///
-    /// This is typically called by database layer implementations after
-    /// executing a locking query.
-    fn from(value: T) -> Self {
-        Acquired { inner: value }
-    }
-}
-
 impl<T> Acquired<T> {
+    /// Wraps a value whose rows are locked by the current transaction.
+    ///
+    /// Database backends call this right after the query that locked the rows,
+    /// either a locking read (e.g., `SELECT ... FOR UPDATE`) or an insert.
+    /// Calling it anywhere else forges the guarantee that mutation methods
+    /// taking an `Acquired<T>` rely on.
+    pub fn from_locked(value: T) -> Self {
+        Self { inner: value }
+    }
+
     /// Consumes the wrapper and returns the inner resource.
     ///
     /// Use this when you need to take ownership of the inner value,
