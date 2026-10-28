@@ -426,6 +426,7 @@ where
 /// This function acquires all locks in a single query with consistent ordering (by ID),
 /// preventing the circular wait condition that can occur when locks are acquired in
 /// separate queries.
+#[allow(clippy::disallowed_methods)]
 async fn lock_melt_quote_and_related_inner<T>(
     executor: &T,
     quote_id: &QuoteId,
@@ -488,8 +489,8 @@ where
     let target_quote = all_quotes.iter().find(|q| &q.id == quote_id).cloned();
 
     Ok(LockedMeltQuotes {
-        target: target_quote.map(|q| q.into()),
-        all_related: all_quotes.into_iter().map(|q| q.into()).collect(),
+        target: target_quote.map(Acquired::from_locked),
+        all_related: all_quotes.into_iter().map(Acquired::from_locked).collect(),
     })
 }
 
@@ -999,6 +1000,7 @@ where
     }
 
     #[instrument(skip_all)]
+    #[allow(clippy::disallowed_methods)]
     async fn add_mint_quote(&mut self, quote: MintQuote) -> Result<Acquired<MintQuote>, Self::Err> {
         query(
             r#"
@@ -1040,7 +1042,7 @@ where
         .execute(&self.inner)
         .await?;
 
-        Ok(quote.into())
+        Ok(Acquired::from_locked(quote))
     }
 
     async fn add_melt_quote(&mut self, quote: mint::MeltQuote) -> Result<(), Self::Err> {
@@ -1182,15 +1184,17 @@ where
         Ok(old_state)
     }
 
+    #[allow(clippy::disallowed_methods)]
     async fn get_mint_quote(
         &mut self,
         quote_id: &QuoteId,
     ) -> Result<Option<Acquired<MintQuote>>, Self::Err> {
         get_mint_quote_inner(&self.inner, quote_id, true)
             .await
-            .map(|quote| quote.map(|inner| inner.into()))
+            .map(|quote| quote.map(Acquired::from_locked))
     }
 
+    #[allow(clippy::disallowed_methods)]
     async fn get_mint_quotes_by_ids(
         &mut self,
         quote_ids: &[QuoteId],
@@ -1200,27 +1204,29 @@ where
             .map(|quotes| {
                 quotes
                     .into_iter()
-                    .map(|quote| quote.map(|inner| inner.into()))
+                    .map(|quote| quote.map(Acquired::from_locked))
                     .collect()
             })
     }
 
+    #[allow(clippy::disallowed_methods)]
     async fn get_melt_quote(
         &mut self,
         quote_id: &QuoteId,
     ) -> Result<Option<Acquired<mint::MeltQuote>>, Self::Err> {
         get_melt_quote_inner(&self.inner, quote_id, true)
             .await
-            .map(|quote| quote.map(|inner| inner.into()))
+            .map(|quote| quote.map(Acquired::from_locked))
     }
 
+    #[allow(clippy::disallowed_methods)]
     async fn get_melt_quotes_by_request_lookup_id(
         &mut self,
         request_lookup_id: &PaymentIdentifier,
     ) -> Result<Vec<Acquired<mint::MeltQuote>>, Self::Err> {
         get_melt_quotes_by_request_lookup_id_inner(&self.inner, request_lookup_id, true)
             .await
-            .map(|quote| quote.into_iter().map(|inner| inner.into()).collect())
+            .map(|quote| quote.into_iter().map(Acquired::from_locked).collect())
     }
 
     async fn lock_melt_quote_and_related(
@@ -1230,22 +1236,24 @@ where
         lock_melt_quote_and_related_inner(&self.inner, quote_id).await
     }
 
+    #[allow(clippy::disallowed_methods)]
     async fn get_mint_quote_by_request(
         &mut self,
         request: &str,
     ) -> Result<Option<Acquired<MintQuote>>, Self::Err> {
         get_mint_quote_by_request_inner(&self.inner, request, true)
             .await
-            .map(|quote| quote.map(|inner| inner.into()))
+            .map(|quote| quote.map(Acquired::from_locked))
     }
 
+    #[allow(clippy::disallowed_methods)]
     async fn get_mint_quote_by_request_lookup_id(
         &mut self,
         request_lookup_id: &PaymentIdentifier,
     ) -> Result<Option<Acquired<MintQuote>>, Self::Err> {
         get_mint_quote_by_request_lookup_id_inner(&self.inner, request_lookup_id, true)
             .await
-            .map(|quote| quote.map(|inner| inner.into()))
+            .map(|quote| quote.map(Acquired::from_locked))
     }
 }
 
