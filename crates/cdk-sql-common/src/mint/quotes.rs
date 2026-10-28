@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use async_trait::async_trait;
-use cdk_common::database::mint::{Acquired, LockedMeltQuotes};
+use cdk_common::database::mint::Acquired;
 use cdk_common::database::{
     self, ConversionError, Error, MintQuotesDatabase, MintQuotesTransaction,
 };
@@ -426,10 +426,10 @@ where
 /// This function acquires all locks in a single query with consistent ordering (by ID),
 /// preventing the circular wait condition that can occur when locks are acquired in
 /// separate queries.
-async fn lock_melt_quote_and_related_inner<T>(
+pub(super) async fn lock_melt_quote_and_related_inner<T>(
     executor: &T,
     quote_id: &QuoteId,
-) -> Result<LockedMeltQuotes, Error>
+) -> Result<Vec<mint::MeltQuote>, Error>
 where
     T: DatabaseExecutor,
 {
@@ -476,21 +476,13 @@ where
         FOR UPDATE
         "#;
 
-    let all_quotes: Vec<mint::MeltQuote> = query(query_str)?
+    query(query_str)?
         .bind("quote_id", quote_id.to_string())
         .fetch_all(executor)
         .await?
         .into_iter()
         .map(sql_row_to_melt_quote)
-        .collect::<Result<Vec<_>, _>>()?;
-
-    // Find the target quote from the locked set
-    let target_quote = all_quotes.iter().find(|q| &q.id == quote_id).cloned();
-
-    Ok(LockedMeltQuotes {
-        target: target_quote.map(|q| q.into()),
-        all_related: all_quotes.into_iter().map(|q| q.into()).collect(),
-    })
+        .collect::<Result<Vec<_>, _>>()
 }
 
 #[instrument(skip_all)]
@@ -998,51 +990,6 @@ where
         Ok(())
     }
 
-    #[instrument(skip_all)]
-    async fn add_mint_quote(&mut self, quote: MintQuote) -> Result<Acquired<MintQuote>, Self::Err> {
-        query(
-            r#"
-                INSERT INTO mint_quote (
-                    id, amount, unit, request, expiry, request_lookup_id, pubkey,
-                    created_time, updated_at, last_checked, payment_method,
-                    request_lookup_id_kind, extra_json
-                )
-                VALUES (
-                    :id, :amount, :unit, :request, :expiry, :request_lookup_id, :pubkey,
-                    :created_time, :updated_at, :last_checked, :payment_method,
-                    :request_lookup_id_kind, :extra_json
-                )
-            "#,
-        )?
-        .bind("id", quote.id.to_string())
-        .bind(
-            "amount",
-            quote
-                .amount
-                .clone()
-                .map(|a| i64::try_from(a.to_u64()))
-                .transpose()?,
-        )
-        .bind("unit", quote.unit.to_string())
-        .bind("request", quote.request.clone())
-        .bind("expiry", i64::try_from(quote.expiry)?)
-        .bind("request_lookup_id", quote.request_lookup_id.to_string())
-        .bind("pubkey", quote.pubkey.map(|p| p.to_string()))
-        .bind("created_time", i64::try_from(quote.created_time)?)
-        .bind("updated_at", i64::try_from(quote.updated_at())?)
-        .bind("last_checked", i64::try_from(quote.last_checked())?)
-        .bind("payment_method", quote.payment_method.to_string())
-        .bind("request_lookup_id_kind", quote.request_lookup_id.kind())
-        .bind(
-            "extra_json",
-            quote.extra_json.as_ref().map(|v| v.to_string()),
-        )
-        .execute(&self.inner)
-        .await?;
-
-        Ok(quote.into())
-    }
-
     async fn add_melt_quote(&mut self, quote: mint::MeltQuote) -> Result<(), Self::Err> {
         // `fee_options` is captured by value here so the subsequent chained
         // binds can move fields out of `quote` without a borrow conflict.
@@ -1180,72 +1127,6 @@ where
         }
 
         Ok(old_state)
-    }
-
-    async fn get_mint_quote(
-        &mut self,
-        quote_id: &QuoteId,
-    ) -> Result<Option<Acquired<MintQuote>>, Self::Err> {
-        get_mint_quote_inner(&self.inner, quote_id, true)
-            .await
-            .map(|quote| quote.map(|inner| inner.into()))
-    }
-
-    async fn get_mint_quotes_by_ids(
-        &mut self,
-        quote_ids: &[QuoteId],
-    ) -> Result<Vec<Option<Acquired<MintQuote>>>, Self::Err> {
-        get_mint_quotes_inner(&self.inner, quote_ids, true)
-            .await
-            .map(|quotes| {
-                quotes
-                    .into_iter()
-                    .map(|quote| quote.map(|inner| inner.into()))
-                    .collect()
-            })
-    }
-
-    async fn get_melt_quote(
-        &mut self,
-        quote_id: &QuoteId,
-    ) -> Result<Option<Acquired<mint::MeltQuote>>, Self::Err> {
-        get_melt_quote_inner(&self.inner, quote_id, true)
-            .await
-            .map(|quote| quote.map(|inner| inner.into()))
-    }
-
-    async fn get_melt_quotes_by_request_lookup_id(
-        &mut self,
-        request_lookup_id: &PaymentIdentifier,
-    ) -> Result<Vec<Acquired<mint::MeltQuote>>, Self::Err> {
-        get_melt_quotes_by_request_lookup_id_inner(&self.inner, request_lookup_id, true)
-            .await
-            .map(|quote| quote.into_iter().map(|inner| inner.into()).collect())
-    }
-
-    async fn lock_melt_quote_and_related(
-        &mut self,
-        quote_id: &QuoteId,
-    ) -> Result<LockedMeltQuotes, Self::Err> {
-        lock_melt_quote_and_related_inner(&self.inner, quote_id).await
-    }
-
-    async fn get_mint_quote_by_request(
-        &mut self,
-        request: &str,
-    ) -> Result<Option<Acquired<MintQuote>>, Self::Err> {
-        get_mint_quote_by_request_inner(&self.inner, request, true)
-            .await
-            .map(|quote| quote.map(|inner| inner.into()))
-    }
-
-    async fn get_mint_quote_by_request_lookup_id(
-        &mut self,
-        request_lookup_id: &PaymentIdentifier,
-    ) -> Result<Option<Acquired<MintQuote>>, Self::Err> {
-        get_mint_quote_by_request_lookup_id_inner(&self.inner, request_lookup_id, true)
-            .await
-            .map(|quote| quote.map(|inner| inner.into()))
     }
 }
 

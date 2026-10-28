@@ -109,13 +109,6 @@ where
         .transpose()?)
     }
 
-    async fn get_saga_for_update(
-        &mut self,
-        operation_id: &uuid::Uuid,
-    ) -> Result<Option<Acquired<mint::Saga>>, Self::Err> {
-        Ok(self.get_saga(operation_id).await?.map(Into::into))
-    }
-
     async fn add_saga(&mut self, saga: &mint::Saga) -> Result<(), Self::Err> {
         let current_time = unix_time();
 
