@@ -15,7 +15,7 @@ default = ["mint", "wallet"]
 test = []
 bench = []
 wallet = ["cashu/wallet", "dep:uuid"]
-mint = ["cashu/mint", "dep:uuid"]
+mint = ["cashu/mint", "dep:uuid", "dep:generativity"]
 nostr = ["wallet", "cashu/nostr"]
 prometheus = ["cdk-prometheus/default"]
 # `http` selects the default `bitreq` backend so any crate enabling HTTP support
@@ -32,6 +32,7 @@ bip353 = ["cdk-http-client?/bip353"]
 async-trait.workspace = true
 bitcoin.workspace = true
 cashu.workspace = true
+generativity = { workspace = true, optional = true }
 serde.workspace = true
 lightning-invoice.workspace = true
 lightning.workspace = true

@@ -1398,6 +1398,7 @@ dependencies = [
  "cdk-prometheus",
  "criterion",
  "futures",
+ "generativity",
  "getrandom 0.4.3",
  "gloo-timers",
  "jsonwebtoken",
@@ -3432,6 +3433,12 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "generativity"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2c81fb5260e37854d09d5c87183309fd8c555b75289427884b25660bc87a85e"
 
 [[package]]
 name = "generic-array"
