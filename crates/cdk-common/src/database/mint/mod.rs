@@ -18,6 +18,7 @@ use crate::nuts::{
 use crate::payment::PaymentIdentifier;
 
 mod auth;
+pub mod branded;
 
 #[cfg(feature = "test")]
 pub mod test;

@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use cdk_common::common::{PaymentProcessorKey, QuoteTTL};
+use cdk_common::database::mint::branded::{make_guard, BrandedAcquired, BrandedTransaction};
 use cdk_common::database::mint::Acquired;
 use cdk_common::database::{self, DynMintAuthDatabase, DynMintDatabase};
 use cdk_common::nuts::{BlindSignature, BlindedMessage, CurrencyUnit, Id};
@@ -1141,16 +1142,20 @@ impl Mint {
             return Err(Error::AmountUndefined);
         }
 
-        let mut tx = localstore.begin_transaction().await?;
+        make_guard!(guard);
+        let mut tx = BrandedTransaction::begin(localstore, guard).await?;
 
         let should_notify = if let Ok(Some(mut mint_quote)) = tx
             .get_mint_quote_by_request_lookup_id(&wait_payment_response.payment_identifier)
             .await
         {
             let previous_state = mint_quote.state();
-            let notify =
-                Self::handle_mint_quote_payment(&mut tx, &mut mint_quote, wait_payment_response)
-                    .await?;
+            let notify = Self::handle_branded_mint_quote_payment(
+                &mut tx,
+                &mut mint_quote,
+                wait_payment_response,
+            )
+            .await?;
             if notify {
                 Some((mint_quote.clone(), mint_quote.amount_paid(), previous_state))
             } else {
@@ -1195,6 +1200,77 @@ impl Mint {
     async fn handle_mint_quote_payment(
         tx: &mut Box<dyn database::MintTransaction<database::Error> + Send + Sync>,
         mint_quote: &mut Acquired<MintQuote>,
+        wait_payment_response: WaitPaymentResponse,
+    ) -> Result<bool, Error> {
+        tracing::debug!(
+            "Received payment notification of {} {:?} for mint quote {} with payment id {}",
+            wait_payment_response.payment_amount,
+            wait_payment_response.unit(),
+            mint_quote.id,
+            wait_payment_response.payment_id.to_string()
+        );
+
+        let quote_state = mint_quote.state();
+        if !mint_quote
+            .payment_ids()
+            .contains(&&wait_payment_response.payment_id)
+        {
+            if mint_quote.payment_method.is_bolt11()
+                && (quote_state == MintQuoteState::Issued || quote_state == MintQuoteState::Paid)
+            {
+                tracing::debug!("Received payment notification for already issued quote.");
+            } else {
+                let payment_amount_quote_unit: Amount<CurrencyUnit> = wait_payment_response
+                    .payment_amount
+                    .convert_to(&mint_quote.unit)?;
+
+                if payment_amount_quote_unit.value() == 0 {
+                    tracing::error!("Zero amount payments should not be recorded.");
+                    return Err(Error::AmountUndefined);
+                }
+
+                tracing::debug!(
+                    "Payment received amount in quote unit {} {}",
+                    mint_quote.unit,
+                    payment_amount_quote_unit
+                );
+
+                match mint_quote.add_payment(
+                    payment_amount_quote_unit,
+                    wait_payment_response.payment_id.clone(),
+                    None,
+                ) {
+                    Ok(()) => {
+                        tx.update_mint_quote(mint_quote).await?;
+                        return Ok(true);
+                    }
+                    Err(Error::DuplicatePaymentId) => {
+                        tracing::debug!(
+                            "Payment ID {} already processed (caught race condition)",
+                            wait_payment_response.payment_id
+                        );
+                        // This is fine - another concurrent request already processed this payment
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+        } else {
+            tracing::debug!("Received payment notification for already seen payment.");
+        }
+
+        Ok(false)
+    }
+
+    /// Copy of [`Self::handle_mint_quote_payment`] for a [`BrandedTransaction`].
+    ///
+    /// The shared `'id` makes the compiler reject a quote locked by another transaction.
+    ///
+    /// Returns `true` if a payment was recorded and a pubsub notification should
+    /// be published **after** the enclosing transaction commits.
+    #[instrument(skip_all)]
+    async fn handle_branded_mint_quote_payment<'id>(
+        tx: &mut BrandedTransaction<'id>,
+        mint_quote: &mut BrandedAcquired<'id, MintQuote>,
         wait_payment_response: WaitPaymentResponse,
     ) -> Result<bool, Error> {
         tracing::debug!(
@@ -2791,5 +2867,55 @@ mod tests {
             "expected ExpiredKeyset error, got: {:?}",
             result
         );
+    }
+
+    #[tokio::test]
+    async fn payment_notification_records_payment_once() {
+        use cdk_common::util::unix_time;
+
+        let mint = create_test_mint().await.unwrap();
+        let db = mint.localstore();
+        let lookup_id = PaymentIdentifier::CustomId("branded-notification".to_owned());
+        let quote = MintQuote::new(
+            None,
+            "branded-notification-request".to_owned(),
+            CurrencyUnit::Sat,
+            Some(Amount::new(100, CurrencyUnit::Sat)),
+            unix_time() + 3600,
+            lookup_id.clone(),
+            None,
+            Amount::new(0, CurrencyUnit::Sat),
+            Amount::new(0, CurrencyUnit::Sat),
+            PaymentMethod::Known(KnownMethod::Bolt11),
+            unix_time(),
+            0,
+            vec![],
+            vec![],
+            None,
+        );
+        let quote_id = quote.id.clone();
+
+        let mut tx = db.begin_transaction().await.unwrap();
+        tx.add_mint_quote(quote).await.unwrap();
+        tx.commit().await.unwrap();
+
+        // A payment backend can deliver the same notification more than once.
+        for _ in 0..2 {
+            Mint::handle_payment_notification(
+                &db,
+                &mint.pubsub_manager(),
+                WaitPaymentResponse {
+                    payment_identifier: lookup_id.clone(),
+                    payment_amount: Amount::new(100, CurrencyUnit::Sat),
+                    payment_id: "branded-notification-payment".to_owned(),
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        let stored = db.get_mint_quote(&quote_id).await.unwrap().unwrap();
+        assert_eq!(stored.amount_paid(), Amount::new(100, CurrencyUnit::Sat));
+        assert_eq!(stored.payment_ids().len(), 1);
     }
 }
