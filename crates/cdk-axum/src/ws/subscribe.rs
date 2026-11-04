@@ -1,15 +1,19 @@
 use cdk::subscription::Params;
 use cdk::ws::WsResponseResult;
+use cdk_common::database::MintStore;
 use cdk_common::pub_sub::Error as PubSubError;
 use cdk_common::terminal::escape_control;
 
 use super::{WsContext, WsError, MAX_FILTERS_PER_SUBSCRIPTION, MAX_SUBSCRIPTIONS_PER_CONNECTION};
 
 /// The `handle` method is called when a client sends a subscription request
-pub(crate) async fn handle(
-    context: &mut WsContext,
+pub(crate) async fn handle<D>(
+    context: &mut WsContext<D>,
     params: Params,
-) -> Result<WsResponseResult, WsError> {
+) -> Result<WsResponseResult, WsError>
+where
+    D: MintStore,
+{
     let sub_id = params.id.clone();
     if context.subscriptions.contains_key(&sub_id) {
         // Subscription ID already exits. Returns an error instead of

@@ -1,4 +1,4 @@
-use cdk_common::database;
+use cdk_common::database::{self, MintStore};
 use tracing::instrument;
 
 use super::nut21::ProtectedEndpoint;
@@ -7,7 +7,10 @@ use super::{
     CurrencyUnit, Error, Mint,
 };
 
-impl Mint {
+impl<D> Mint<D>
+where
+    D: MintStore,
+{
     /// Check if and what kind of auth is required for a method
     #[instrument(skip(self), fields(endpoint = ?method))]
     pub async fn is_protected(
@@ -232,6 +235,7 @@ mod tests {
 
     use super::*;
     use crate::mint::{MintBuilder, MintMeltLimits};
+    use crate::test_helpers::mint::TestMint as Mint;
     use crate::types::FeeReserve;
 
     async fn create_auth_enabled_mint() -> Mint {

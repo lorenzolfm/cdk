@@ -1,11 +1,15 @@
 use cdk::ws::{WsResponseResult, WsUnsubscribeRequest};
+use cdk_common::database::MintStore;
 
 use super::{WsContext, WsError};
 
-pub(crate) async fn handle(
-    context: &mut WsContext,
+pub(crate) async fn handle<D>(
+    context: &mut WsContext<D>,
     req: WsUnsubscribeRequest,
-) -> Result<WsResponseResult, WsError> {
+) -> Result<WsResponseResult, WsError>
+where
+    D: MintStore,
+{
     if let Some(handle) = context.subscriptions.remove(&req.sub_id) {
         handle.abort();
         Ok(WsResponseResult {

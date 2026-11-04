@@ -1,12 +1,16 @@
 //! Mint metadata service.
 
 use cdk::nuts::MintInfo;
+use cdk_common::database::MintStore;
 use tonic::{Request, Response, Status};
 
 use super::MintRPCServer;
 use crate::info::mint_info_service_server::MintInfoService;
 
-impl MintRPCServer {
+impl<D> MintRPCServer<D>
+where
+    D: MintStore,
+{
     /// Applies a mutation to the mint's info and returns the info in effect
     /// after the update
     async fn update_mint_info_with(
@@ -52,7 +56,10 @@ fn info_contacts(contact: Option<Vec<cdk::nuts::ContactInfo>>) -> Vec<crate::inf
 }
 
 #[tonic::async_trait]
-impl MintInfoService for MintRPCServer {
+impl<D> MintInfoService for MintRPCServer<D>
+where
+    D: MintStore,
+{
     /// Returns the mint's public metadata
     async fn get_info(
         &self,

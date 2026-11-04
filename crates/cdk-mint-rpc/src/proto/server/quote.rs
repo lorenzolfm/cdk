@@ -3,13 +3,18 @@
 use cdk::mint::MintQuote;
 use cdk::nuts::MintQuoteState;
 use cdk::types::QuoteTTL;
+use cdk_common::database::mint::prelude::*;
+use cdk_common::database::MintStore;
 use cdk_common::payment::WaitPaymentResponse;
 use tonic::{Request, Response, Status};
 
 use super::MintRPCServer;
 use crate::quote::quote_service_server::QuoteService;
 
-impl MintRPCServer {
+impl<D> MintRPCServer<D>
+where
+    D: MintStore,
+{
     fn ensure_mint_quote_state_override_allowed(&self) -> Result<(), Status> {
         if !self.allow_mint_quote_payment_override {
             return Err(Status::permission_denied(
@@ -123,7 +128,10 @@ impl MintRPCServer {
 }
 
 #[tonic::async_trait]
-impl QuoteService for MintRPCServer {
+impl<D> QuoteService for MintRPCServer<D>
+where
+    D: MintStore,
+{
     /// Gets the mint's quote time-to-live settings
     async fn get_quote_ttl(
         &self,
@@ -208,6 +216,7 @@ mod tests {
     use cdk::nuts::{CurrencyUnit, MintRequest, PreMintSecrets};
     use cdk::Amount;
     use cdk_common::MintQuoteBolt11Request;
+    use cdk_sqlite::mint::MintSqliteDatabase;
 
     use super::super::test_utils::{
         create_test_rpc_server, create_test_rpc_server_with_payment_delay, UNKNOWN_QUOTE_ID,
@@ -256,7 +265,10 @@ mod tests {
     }
 
     /// Creates a bolt11 mint quote for `amount` sats and returns its id
-    async fn create_test_mint_quote(server: &MintRPCServer, amount: u64) -> String {
+    async fn create_test_mint_quote(
+        server: &MintRPCServer<MintSqliteDatabase>,
+        amount: u64,
+    ) -> String {
         let response = server
             .mint
             .get_mint_quote(
@@ -275,7 +287,11 @@ mod tests {
     }
 
     /// Issues the full paid amount of a quote, leaving it in the issued state
-    async fn issue_test_mint_quote(server: &MintRPCServer, quote_id: &str, amount: u64) {
+    async fn issue_test_mint_quote(
+        server: &MintRPCServer<MintSqliteDatabase>,
+        quote_id: &str,
+        amount: u64,
+    ) {
         let keyset_id = *server
             .mint
             .get_active_keysets()
@@ -311,7 +327,7 @@ mod tests {
     }
 
     /// Returns the amount recorded as paid against a quote
-    async fn amount_paid(server: &MintRPCServer, quote_id: &str) -> u64 {
+    async fn amount_paid(server: &MintRPCServer<MintSqliteDatabase>, quote_id: &str) -> u64 {
         server
             .mint
             .localstore()

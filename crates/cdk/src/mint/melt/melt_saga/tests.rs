@@ -10,6 +10,7 @@
 
 use std::str::FromStr;
 
+use cdk_common::database::mint::prelude::*;
 use cdk_common::melt::MeltQuoteRequest;
 use cdk_common::mint::{
     MeltFinalizationData, MeltPaymentRequest, MeltQuote, MeltSagaState, OperationKind, Saga,
@@ -29,7 +30,7 @@ use crate::mint::melt::melt_saga::{MeltSaga, PaymentOutcome};
 use crate::mint::melt::shared::{
     finalize_melt_quote, process_melt_change, rollback_melt_quote, MeltChangeResult,
 };
-use crate::test_helpers::mint::{create_test_mint, mint_test_proofs};
+use crate::test_helpers::mint::{create_test_mint, mint_test_proofs, TestDb, TestMint};
 
 // ============================================================================
 // Basic State Transition Tests
@@ -604,7 +605,7 @@ async fn test_finalizing_recovery_uses_persisted_payment_fee() {
     .unwrap();
 
     let mut proofs_with_state = tx.get_proofs(&input_ys).await.unwrap();
-    crate::mint::Mint::update_proofs_state(&mut tx, &mut proofs_with_state, State::Spent)
+    TestMint::update_proofs_state(&mut tx, &mut proofs_with_state, State::Spent)
         .await
         .unwrap();
     let mut saga = tx
@@ -1211,12 +1212,12 @@ async fn test_crash_recovery_internal_settlement() {
 ///
 /// Returns (mint_quote_id, melt_quote, melt_request, setup saga, input_ys).
 async fn setup_internal_melt(
-    mint: &crate::mint::Mint,
+    mint: &TestMint,
 ) -> (
     cdk_common::QuoteId,
     MeltQuote,
     MeltRequest<cdk_common::QuoteId>,
-    MeltSaga<crate::mint::melt::melt_saga::state::SetupComplete>,
+    MeltSaga<TestDb, crate::mint::melt::melt_saga::state::SetupComplete>,
     Vec<cdk_common::PublicKey>,
 ) {
     let proofs = mint_test_proofs(mint, Amount::from(10_000)).await.unwrap();
@@ -3116,8 +3117,7 @@ async fn test_paid_melt_responses_wait_for_change_commit() {
     use cdk_common::subscription::{Params, SubId};
 
     use crate::mint::melt::shared::finalize_melt_core;
-    use crate::mint::Mint;
-    use crate::test_helpers::mint::create_test_blinded_messages;
+    use crate::test_helpers::mint::{create_test_blinded_messages, TestMint as Mint};
 
     for with_change in [true, false] {
         let mint = create_test_mint().await.unwrap();
@@ -4523,10 +4523,7 @@ async fn test_setup_complete_state_compensates() {
 /// Uses `create_fake_invoice()` from cdk-fake-wallet to generate a valid
 /// bolt11 invoice that FakeWallet will process. The FakeInvoiceDescription
 /// controls payment behavior (success/failure).
-async fn create_test_melt_quote(
-    mint: &crate::mint::Mint,
-    amount: Amount,
-) -> cdk_common::mint::MeltQuote {
+async fn create_test_melt_quote(mint: &TestMint, amount: Amount) -> cdk_common::mint::MeltQuote {
     create_test_melt_quote_with_description(
         mint,
         amount,
@@ -4541,7 +4538,7 @@ async fn create_test_melt_quote(
 }
 
 async fn create_test_melt_quote_with_description(
-    mint: &crate::mint::Mint,
+    mint: &TestMint,
     amount: Amount,
     fake_description: FakeInvoiceDescription,
 ) -> cdk_common::mint::MeltQuote {
@@ -4576,7 +4573,7 @@ async fn create_test_melt_quote_with_description(
     quote
 }
 
-async fn create_test_onchain_melt_quote(mint: &crate::mint::Mint) -> cdk_common::mint::MeltQuote {
+async fn create_test_onchain_melt_quote(mint: &TestMint) -> cdk_common::mint::MeltQuote {
     let quote = MeltQuote::new_onchain(
         None,
         MeltPaymentRequest::Onchain {
@@ -4637,7 +4634,7 @@ fn create_test_melt_request(
 }
 
 /// Helper: Verify saga exists in database
-async fn assert_saga_exists(mint: &crate::mint::Mint, operation_id: &uuid::Uuid) -> Saga {
+async fn assert_saga_exists(mint: &TestMint, operation_id: &uuid::Uuid) -> Saga {
     let sagas = mint
         .localstore
         .get_incomplete_sagas(OperationKind::Melt)
@@ -4651,7 +4648,7 @@ async fn assert_saga_exists(mint: &crate::mint::Mint, operation_id: &uuid::Uuid)
 }
 
 /// Helper: Verify saga does not exist in database
-async fn assert_saga_not_exists(mint: &crate::mint::Mint, operation_id: &uuid::Uuid) {
+async fn assert_saga_not_exists(mint: &TestMint, operation_id: &uuid::Uuid) {
     let sagas = mint
         .localstore
         .get_incomplete_sagas(OperationKind::Melt)
@@ -4666,7 +4663,7 @@ async fn assert_saga_not_exists(mint: &crate::mint::Mint, operation_id: &uuid::U
 
 /// Helper: Verify proofs are in expected state
 async fn assert_proofs_state(
-    mint: &crate::mint::Mint,
+    mint: &TestMint,
     ys: &[cdk_common::PublicKey],
     expected_state: Option<State>,
 ) {

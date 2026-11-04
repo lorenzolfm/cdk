@@ -3,13 +3,13 @@
 use std::str::FromStr;
 
 use async_trait::async_trait;
-use cdk_common::database::mint::{Acquired, SagaDatabase, SagaTransaction};
+use cdk_common::database::mint::{SagaDatabase, SagaTransaction};
 use cdk_common::database::Error;
 use cdk_common::mint;
 use cdk_common::util::unix_time;
 use serde_json;
 
-use super::{SQLMintDatabase, SQLTransaction};
+use super::{Acquired, SQLMintDatabase, SQLTransaction};
 use crate::pool::DatabasePool;
 use crate::stmt::{query, Column};
 use crate::{column_as_number, column_as_string, unpack_into};
@@ -113,7 +113,7 @@ where
         &mut self,
         operation_id: &uuid::Uuid,
     ) -> Result<Option<Acquired<mint::Saga>>, Self::Err> {
-        Ok(self.get_saga(operation_id).await?.map(Into::into))
+        Ok(self.get_saga(operation_id).await?.map(Acquired::new))
     }
 
     async fn add_saga(&mut self, saga: &mint::Saga) -> Result<(), Self::Err> {

@@ -5,14 +5,14 @@
 
 use std::sync::Arc;
 
+use cdk_common::database::mint::prelude::*;
 use cdk_common::nuts::{Proofs, ProofsMethods};
 use cdk_common::{Amount, State};
 
 use super::SwapSaga;
-use crate::mint::swap::Mint;
 use crate::mint::Verification;
 use crate::test_helpers::mint::{
-    clear_fail_for, create_test_blinded_messages, create_test_mint, set_fail_for,
+    clear_fail_for, create_test_blinded_messages, create_test_mint, set_fail_for, TestMint as Mint,
 };
 
 /// Helper to create a verification result for testing

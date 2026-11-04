@@ -1,7 +1,8 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use cdk_common::database::DynMintDatabase;
+use cdk_common::database::mint::prelude::*;
+use cdk_common::database::MintStore;
 use cdk_common::mint::{Operation, Saga, SwapSagaState};
 use cdk_common::nuts::BlindedMessage;
 use cdk_common::{database, Error, Proofs, ProofsMethods, PublicKey, QuoteId, State};
@@ -90,19 +91,25 @@ mod tests;
 /// - State-specific data (e.g., signatures) only exists in the appropriate state type
 /// - No runtime state checks or `Option<T>` unwrapping needed
 /// - IDE autocomplete only shows valid operations for each state
-pub struct SwapSaga<'a, S> {
-    mint: &'a super::Mint,
-    db: DynMintDatabase,
-    pubsub: Arc<PubSubManager>,
+pub struct SwapSaga<'a, D, S>
+where
+    D: MintStore,
+{
+    mint: &'a super::Mint<D>,
+    db: Arc<D>,
+    pubsub: Arc<PubSubManager<D>>,
     /// Compensating actions in LIFO order (most recent first)
-    compensations: VecDeque<Box<dyn CompensatingAction>>,
+    compensations: VecDeque<Box<dyn CompensatingAction<D>>>,
     /// Operation ID (used for saga tracking, generated upfront)
     operation_id: uuid::Uuid,
     state_data: S,
 }
 
-impl<'a> SwapSaga<'a, Initial> {
-    pub fn new(mint: &'a super::Mint, db: DynMintDatabase, pubsub: Arc<PubSubManager>) -> Self {
+impl<'a, D> SwapSaga<'a, D, Initial>
+where
+    D: MintStore,
+{
+    pub fn new(mint: &'a super::Mint<D>, db: Arc<D>, pubsub: Arc<PubSubManager<D>>) -> Self {
         let operation_id = uuid::Uuid::now_v7();
 
         Self {
@@ -146,7 +153,7 @@ impl<'a> SwapSaga<'a, Initial> {
         blinded_messages: &[BlindedMessage],
         quote_id: Option<QuoteId>,
         input_verification: crate::mint::Verification,
-    ) -> Result<SwapSaga<'a, SetupComplete>, Error> {
+    ) -> Result<SwapSaga<'a, D, SetupComplete>, Error> {
         let output_verification = self.mint.verify_outputs(blinded_messages).map_err(|err| {
             tracing::debug!("Output verification failed: {:?}", err);
             err
@@ -202,7 +209,8 @@ impl<'a> SwapSaga<'a, Initial> {
             Err(err) => return Err(Error::NUT00(err)),
         };
 
-        if let Err(err) = Mint::update_proofs_state(&mut tx, &mut new_proofs, State::Pending).await
+        if let Err(err) =
+            Mint::<D>::update_proofs_state(&mut tx, &mut new_proofs, State::Pending).await
         {
             tx.rollback().await?;
             return Err(err);
@@ -264,7 +272,10 @@ impl<'a> SwapSaga<'a, Initial> {
     }
 }
 
-impl<'a> SwapSaga<'a, SetupComplete> {
+impl<'a, D> SwapSaga<'a, D, SetupComplete>
+where
+    D: MintStore,
+{
     /// Performs blind signing of output blinded messages.
     ///
     /// This is a non-transactional cryptographic operation that happens after `setup_swap`
@@ -285,7 +296,7 @@ impl<'a> SwapSaga<'a, SetupComplete> {
     ///
     /// - Propagates any errors from the blind signing operation
     #[instrument(skip_all)]
-    pub async fn sign_outputs(self) -> Result<SwapSaga<'a, Signed>, Error> {
+    pub async fn sign_outputs(self) -> Result<SwapSaga<'a, D, Signed>, Error> {
         match self
             .mint
             .blind_sign(self.state_data.blinded_messages.clone())
@@ -319,7 +330,10 @@ impl<'a> SwapSaga<'a, SetupComplete> {
     }
 }
 
-impl SwapSaga<'_, Signed> {
+impl<D> SwapSaga<'_, D, Signed>
+where
+    D: MintStore,
+{
     /// Finalizes the swap by committing signatures and marking inputs as spent.
     ///
     /// This is the second and final transaction (TX2) in the saga and completes the swap.
@@ -407,7 +421,7 @@ impl SwapSaga<'_, Signed> {
             }
         };
 
-        if let Err(err) = Mint::update_proofs_state(&mut tx, &mut proofs, State::Spent).await {
+        if let Err(err) = Mint::<D>::update_proofs_state(&mut tx, &mut proofs, State::Spent).await {
             tx.rollback().await?;
             self.compensate_all().await?;
             return Err(err);
@@ -450,7 +464,10 @@ impl SwapSaga<'_, Signed> {
     }
 }
 
-impl<S> SwapSaga<'_, S> {
+impl<D, S> SwapSaga<'_, D, S>
+where
+    D: MintStore,
+{
     /// Execute all compensating actions and consume the saga.
     ///
     /// This method takes ownership of self to ensure the saga cannot be used

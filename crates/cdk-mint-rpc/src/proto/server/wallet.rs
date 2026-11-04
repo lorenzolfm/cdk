@@ -1,5 +1,6 @@
 //! On-chain wallet management service.
 
+use cdk_common::database::MintStore;
 use tonic::{Request, Response, Status};
 
 use super::{page_limit, MintRPCServer};
@@ -11,7 +12,10 @@ const MAX_TRANSACTION_LIMIT: u32 = 100;
 const DEFAULT_ADDRESS_LIMIT: u32 = 100;
 const MAX_ADDRESS_LIMIT: u32 = 1_000;
 
-impl MintRPCServer {
+impl<D> MintRPCServer<D>
+where
+    D: MintStore,
+{
     fn wallet_info_provider(&self) -> Result<&DynWalletInfoProvider, Status> {
         self.wallet_info_provider.as_ref().ok_or_else(|| {
             Status::failed_precondition("No on-chain wallet information provider is configured")
@@ -20,7 +24,10 @@ impl MintRPCServer {
 }
 
 #[tonic::async_trait]
-impl WalletService for MintRPCServer {
+impl<D> WalletService for MintRPCServer<D>
+where
+    D: MintStore,
+{
     /// Creates an on-chain address for operator deposits.
     async fn create_deposit_address(
         &self,

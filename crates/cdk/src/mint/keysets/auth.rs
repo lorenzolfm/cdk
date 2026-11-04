@@ -1,12 +1,16 @@
 //! Auth keyset functions
 
+use cdk_common::database::MintStore;
 use cdk_common::{CurrencyUnit, KeySetInfo};
 use tracing::instrument;
 
 use crate::mint::{KeysResponse, KeysetResponse};
 use crate::{Error, Mint};
 
-impl Mint {
+impl<D> Mint<D>
+where
+    D: MintStore,
+{
     /// Retrieve the auth public keys of the active keyset for distribution to wallet
     /// clients
     #[instrument(skip_all)]

@@ -8,14 +8,13 @@ use cdk_common::nuts::{
 };
 use cdk_common::Amount;
 
-use crate::mint::Mint;
 use crate::secret::Secret;
-use crate::test_helpers::mint::{create_test_mint, mint_test_proofs};
+use crate::test_helpers::mint::{create_test_mint, mint_test_proofs, TestMint};
 use crate::Error;
 
 /// Test mint wrapper with convenient access to common keyset info
 pub struct TestMintHelper {
-    pub mint: Mint,
+    pub mint: TestMint,
     pub active_sat_keyset_id: Id,
     pub public_keys_of_the_active_sat_keyset: Keys,
     /// Available denominations sorted largest first (e.g., [2147483648, 1073741824, ..., 2, 1])
@@ -58,7 +57,7 @@ impl TestMintHelper {
     }
 
     /// Get a reference to the underlying mint
-    pub fn mint(&self) -> &Mint {
+    pub fn mint(&self) -> &TestMint {
         &self.mint
     }
 

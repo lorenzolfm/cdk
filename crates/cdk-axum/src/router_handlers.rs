@@ -10,6 +10,7 @@ use cdk::nuts::{
     RestoreRequest, RestoreResponse, SwapRequest, SwapResponse,
 };
 use cdk::util::unix_time;
+use cdk_common::database::MintStore;
 use paste::paste;
 use tracing::instrument;
 
@@ -24,11 +25,14 @@ macro_rules! post_cache_wrapper {
         paste! {
             /// Cache wrapper function for $handler:
             /// Wrap $handler into a function that caches responses using the request as key
-            pub async fn [<cache_ $handler>](
+            pub async fn [<cache_ $handler>]<D>(
                 auth: AuthHeader,
-                state: State<MintState>,
+                state: State<MintState<D>>,
                 payload: Json<$request_type>
-            ) -> Result<Json<$response_type>, Response> {
+            ) -> Result<Json<$response_type>, Response>
+            where
+                D: MintStore,
+            {
                 use std::ops::Deref;
                 let json_extracted_payload = payload.deref();
                 let State(mint_state) = state.clone();
@@ -57,12 +61,15 @@ macro_rules! post_cache_wrapper_with_prefer {
         paste! {
             /// Cache wrapper function for $handler with PreferHeader support:
             /// Wrap $handler into a function that caches responses using the request as key
-            pub async fn [<cache_ $handler>](
+            pub async fn [<cache_ $handler>]<D>(
                 auth: AuthHeader,
                 prefer: PreferHeader,
-                state: State<MintState>,
+                state: State<MintState<D>>,
                 payload: Json<$request_type>
-            ) -> Result<Json<$response_type>, Response> {
+            ) -> Result<Json<$response_type>, Response>
+            where
+                D: MintStore,
+            {
                 use std::ops::Deref;
 
                 let json_extracted_payload = payload.deref();
@@ -91,9 +98,12 @@ post_cache_wrapper!(post_swap, SwapRequest, SwapResponse);
 ///
 /// This endpoint returns a dictionary of all supported token values of the mint and their associated public key.
 #[instrument(skip_all)]
-pub(crate) async fn get_keys(
-    State(state): State<MintState>,
-) -> Result<Json<KeysResponse>, Response> {
+pub(crate) async fn get_keys<D>(
+    State(state): State<MintState<D>>,
+) -> Result<Json<KeysResponse>, Response>
+where
+    D: MintStore,
+{
     Ok(Json(state.mint.pubkeys()))
 }
 
@@ -101,10 +111,13 @@ pub(crate) async fn get_keys(
 ///
 /// Get the public keys of the mint from a specific keyset ID.
 #[instrument(skip_all, fields(keyset_id = ?keyset_id))]
-pub(crate) async fn get_keyset_pubkeys(
-    State(state): State<MintState>,
+pub(crate) async fn get_keyset_pubkeys<D>(
+    State(state): State<MintState<D>>,
     Path(keyset_id): Path<Id>,
-) -> Result<Json<KeysResponse>, Response> {
+) -> Result<Json<KeysResponse>, Response>
+where
+    D: MintStore,
+{
     let pubkeys = state.mint.keyset_pubkeys(&keyset_id).map_err(|err| {
         tracing::error!("Could not get keyset pubkeys: {}", err);
         into_response(err)
@@ -117,18 +130,24 @@ pub(crate) async fn get_keyset_pubkeys(
 ///
 /// This endpoint returns a list of keysets that the mint currently supports and will accept tokens from.
 #[instrument(skip_all)]
-pub(crate) async fn get_keysets(
-    State(state): State<MintState>,
-) -> Result<Json<KeysetResponse>, Response> {
+pub(crate) async fn get_keysets<D>(
+    State(state): State<MintState<D>>,
+) -> Result<Json<KeysetResponse>, Response>
+where
+    D: MintStore,
+{
     Ok(Json(state.mint.keysets()))
 }
 
 #[instrument(skip_all)]
-pub(crate) async fn ws_handler(
+pub(crate) async fn ws_handler<D>(
     auth: AuthHeader,
-    State(state): State<MintState>,
+    State(state): State<MintState<D>>,
     ws: WebSocketUpgrade,
-) -> Result<impl IntoResponse, Response> {
+) -> Result<impl IntoResponse, Response>
+where
+    D: MintStore,
+{
     state
         .mint
         .verify_auth(
@@ -145,11 +164,14 @@ pub(crate) async fn ws_handler(
 ///
 /// Check whether a secret has been spent already or not.
 #[instrument(skip_all, fields(y_count = ?payload.ys.len()))]
-pub(crate) async fn post_check(
+pub(crate) async fn post_check<D>(
     auth: AuthHeader,
-    State(state): State<MintState>,
+    State(state): State<MintState<D>>,
     Json(payload): Json<CheckStateRequest>,
-) -> Result<Json<CheckStateResponse>, Response> {
+) -> Result<Json<CheckStateResponse>, Response>
+where
+    D: MintStore,
+{
     state
         .mint
         .verify_auth(
@@ -169,9 +191,12 @@ pub(crate) async fn post_check(
 
 /// Mint information, operator contact information, and other info
 #[instrument(skip_all)]
-pub(crate) async fn get_mint_info(
-    State(state): State<MintState>,
-) -> Result<Json<MintInfo>, Response> {
+pub(crate) async fn get_mint_info<D>(
+    State(state): State<MintState<D>>,
+) -> Result<Json<MintInfo>, Response>
+where
+    D: MintStore,
+{
     Ok(Json(
         state
             .mint
@@ -192,11 +217,14 @@ pub(crate) async fn get_mint_info(
 ///
 /// This endpoint can be used by Alice to swap a set of proofs before making a payment to Carol. It can then used by Carol to redeem the tokens for new proofs.
 #[instrument(skip_all, fields(inputs_count = ?payload.inputs().len()))]
-pub(crate) async fn post_swap(
+pub(crate) async fn post_swap<D>(
     auth: AuthHeader,
-    State(state): State<MintState>,
+    State(state): State<MintState<D>>,
     Json(payload): Json<SwapRequest>,
-) -> Result<Json<SwapResponse>, Response> {
+) -> Result<Json<SwapResponse>, Response>
+where
+    D: MintStore,
+{
     state
         .mint
         .verify_auth(
@@ -220,11 +248,14 @@ pub(crate) async fn post_swap(
 
 /// Restores blind signature for a set of outputs.
 #[instrument(skip_all, fields(outputs_count = ?payload.outputs.len()))]
-pub(crate) async fn post_restore(
+pub(crate) async fn post_restore<D>(
     auth: AuthHeader,
-    State(state): State<MintState>,
+    State(state): State<MintState<D>>,
     Json(payload): Json<RestoreRequest>,
-) -> Result<Json<RestoreResponse>, Response> {
+) -> Result<Json<RestoreResponse>, Response>
+where
+    D: MintStore,
+{
     state
         .mint
         .verify_auth(
@@ -722,9 +753,12 @@ body {
 #[cfg(feature = "info-page")]
 /// Get the index page
 #[instrument(skip_all)]
-pub(crate) async fn get_index(
-    State(state): State<MintState>,
-) -> Result<impl IntoResponse, Response> {
+pub(crate) async fn get_index<D>(
+    State(state): State<MintState<D>>,
+) -> Result<impl IntoResponse, Response>
+where
+    D: MintStore,
+{
     use maud::html;
 
     let mint_info = state.mint.mint_info().await.map_err(into_response)?;

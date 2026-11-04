@@ -1,7 +1,7 @@
 //! CDK Database
 
 use std::collections::HashMap;
-use std::ops::{Deref, DerefMut};
+use std::ops::DerefMut;
 
 use async_trait::async_trait;
 use cashu::quote_id::QuoteId;
@@ -18,6 +18,7 @@ use crate::nuts::{
 use crate::payment::PaymentIdentifier;
 
 mod auth;
+pub mod prelude;
 
 #[cfg(feature = "test")]
 pub mod test;
@@ -30,74 +31,110 @@ pub use super::kvstore::{
     KVSTORE_NAMESPACE_KEY_ALPHABET, KVSTORE_NAMESPACE_KEY_MAX_LEN,
 };
 
-/// A wrapper indicating that a resource has been acquired with a database lock.
+/// A value wrapper a transaction hands out once it holds the value's row lock.
 ///
-/// This type is returned by database operations that lock rows for update
-/// (e.g., `SELECT ... FOR UPDATE`). It serves as a compile-time marker that
-/// the wrapped resource was properly locked before being returned, ensuring
-/// that subsequent modifications are safe from race conditions.
+/// Each backend has its own wrapper type and keeps its constructor private, so
+/// only the code that ran the locking query can build one.
 ///
-/// # Usage
+/// `DerefMut` gives transparent access to the value's fields and methods.
+pub trait LockedValue<T>: DerefMut<Target = T> + Send {
+    /// Consumes the wrapper and returns the value.
+    ///
+    /// Use this once the value no longer needs to be written through the
+    /// transaction, for example to return it after the commit.
+    fn into_inner(self) -> T;
+}
+
+/// Base of the transaction traits that hand out or take locked values.
 ///
-/// When you need to modify a database record, first acquire it using a locking
-/// query method. The returned `Acquired<T>` guarantees the row is locked for
-/// the duration of the transaction.
+/// [`QuotesTransaction`], [`ProofsTransaction`] and [`SagaTransaction`] share it
+/// so that one transaction has one wrapper type.
 ///
-/// ```ignore
-/// // Acquire a quote with a row lock
-/// let mut quote: Acquired<MintQuote> = tx.get_mint_quote_for_update(&quote_id).await?;
+/// Code that is generic over the backend can write a value the transaction
+/// locked, from a future that can move between threads:
 ///
-/// // Safely modify the quote (row is locked)
-/// quote.state = QuoteState::Paid;
+/// ```
+/// use cdk_common::database::mint::prelude::*;
+/// use cdk_common::database::{Error, MintTransaction};
+/// use cdk_common::mint::MintQuote;
+/// use cdk_common::QuoteId;
 ///
-/// // Persist the changes
-/// tx.update_mint_quote(&mut quote).await?;
+/// async fn write_locked<T>(tx: &mut T, id: &QuoteId) -> Result<Option<MintQuote>, Error>
+/// where
+///     T: MintTransaction<Error> + Send,
+/// {
+///     let Some(mut quote) = tx.get_mint_quote(id).await? else {
+///         return Ok(None);
+///     };
+///     tx.update_mint_quote(&mut quote).await?;
+///     Ok(Some(quote.into_inner()))
+/// }
+///
+/// fn assert_send<F>(_future: F)
+/// where
+///     F: Send,
+/// {
+/// }
+///
+/// fn write_locked_is_send<T>(tx: &mut T, id: &QuoteId)
+/// where
+///     T: MintTransaction<Error> + Send,
+/// {
+///     assert_send(write_locked(tx, id));
+/// }
 /// ```
 ///
-/// # Deref Behavior
+/// That code can't turn a plain value into a locked one:
 ///
-/// `Acquired<T>` implements `Deref` and `DerefMut`, allowing transparent access
-/// to the inner value's methods and fields.
-#[derive(Debug)]
-pub struct Acquired<T> {
-    inner: T,
-}
-
-impl<T> From<T> for Acquired<T> {
-    /// Wraps a value to indicate it has been acquired with a lock.
+/// ```compile_fail,E0277
+/// use cdk_common::database::mint::prelude::*;
+/// use cdk_common::database::{Error, MintTransaction};
+/// use cdk_common::mint::MintQuote;
+///
+/// async fn write_plain<T>(tx: &mut T, quote: MintQuote) -> Result<(), Error>
+/// where
+///     T: MintTransaction<Error> + Send,
+/// {
+///     let mut quote: T::Locked<MintQuote> = quote.into();
+///     tx.update_mint_quote(&mut quote).await
+/// }
+/// ```
+///
+/// or pass a value locked by another backend:
+///
+/// ```compile_fail,E0308
+/// use cdk_common::database::mint::prelude::*;
+/// use cdk_common::database::{Error, MintTransaction};
+/// use cdk_common::mint::MintQuote;
+/// use cdk_common::QuoteId;
+///
+/// async fn write_across_backends<A, B>(a: &mut A, b: &mut B, id: &QuoteId) -> Result<(), Error>
+/// where
+///     A: MintTransaction<Error> + Send,
+///     B: MintTransaction<Error> + Send,
+/// {
+///     if let Some(mut quote) = a.get_mint_quote(id).await? {
+///         b.update_mint_quote(&mut quote).await?;
+///     }
+///     Ok(())
+/// }
+/// ```
+pub trait LockingTransaction {
+    /// A storage-specific mutable wrapper around a value locked by a transaction.
     ///
-    /// This is typically called by database layer implementations after
-    /// executing a locking query.
-    fn from(value: T) -> Self {
-        Acquired { inner: value }
-    }
-}
-
-impl<T> Acquired<T> {
-    /// Consumes the wrapper and returns the inner resource.
+    /// Returned by operations that lock rows for update (e.g.,
+    /// `SELECT ... FOR UPDATE`) and required by the operations that write them.
     ///
-    /// Use this when you need to take ownership of the inner value,
-    /// for example when passing it to a function that doesn't accept
-    /// `Acquired<T>`.
-    pub fn inner(self) -> T {
-        self.inner
-    }
-}
-
-impl<T> Deref for Acquired<T> {
-    type Target = T;
-
-    /// Returns a reference to the inner resource.
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
-impl<T> DerefMut for Acquired<T> {
-    /// Returns a mutable reference to the inner resource.
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
-    }
+    /// ```ignore
+    /// // Lock the row
+    /// let mut quote = tx.get_melt_quote(&quote_id).await?.ok_or(Error::UnknownQuote)?;
+    ///
+    /// // Persist the change
+    /// tx.update_melt_quote_state(&mut quote, MeltQuoteState::Paid, None).await?;
+    /// ```
+    type Locked<T>: LockedValue<T>
+    where
+        T: Send;
 }
 
 /// Information about a melt request stored in the database
@@ -116,11 +153,11 @@ pub struct MeltRequestInfo {
 /// This struct is returned by [`QuotesTransaction::lock_melt_quote_and_related`]
 /// and contains both the target quote and all quotes sharing the same `request_lookup_id`.
 #[derive(Debug)]
-pub struct LockedMeltQuotes {
+pub struct LockedMeltQuotes<Q> {
     /// The target quote that was requested, if found
-    pub target: Option<Acquired<MeltQuote>>,
+    pub target: Option<Q>,
     /// All quotes sharing the same `request_lookup_id` (including the target)
-    pub all_related: Vec<Acquired<MeltQuote>>,
+    pub all_related: Vec<Q>,
 }
 
 /// KeysDatabaseWriter
@@ -206,7 +243,7 @@ pub trait KeysDatabase {
 
 /// Mint Quote Database writer trait
 #[async_trait]
-pub trait QuotesTransaction {
+pub trait QuotesTransaction: LockingTransaction {
     /// Mint Quotes Database Error
     type Err: Into<Error> + From<Error>;
 
@@ -245,7 +282,7 @@ pub trait QuotesTransaction {
     async fn get_mint_quote(
         &mut self,
         quote_id: &QuoteId,
-    ) -> Result<Option<Acquired<MintMintQuote>>, Self::Err>;
+    ) -> Result<Option<Self::Locked<MintMintQuote>>, Self::Err>;
 
     /// Get multiple [`MintMintQuote`]s by their IDs and lock them for update in this transaction.
     ///
@@ -254,13 +291,13 @@ pub trait QuotesTransaction {
     async fn get_mint_quotes_by_ids(
         &mut self,
         quote_ids: &[QuoteId],
-    ) -> Result<Vec<Option<Acquired<MintMintQuote>>>, Self::Err>;
+    ) -> Result<Vec<Option<Self::Locked<MintMintQuote>>>, Self::Err>;
 
     /// Add [`MintMintQuote`]
     async fn add_mint_quote(
         &mut self,
         quote: MintMintQuote,
-    ) -> Result<Acquired<MintMintQuote>, Self::Err>;
+    ) -> Result<Self::Locked<MintMintQuote>, Self::Err>;
 
     /// Persists any pending changes made to the mint quote.
     ///
@@ -273,7 +310,7 @@ pub trait QuotesTransaction {
     ///
     /// # Arguments
     ///
-    /// * `quote` - A mutable reference to an acquired (row-locked) mint quote. The quote
+    /// * `quote` - A mutable reference to a locked mint quote. The quote
     ///   must be locked to ensure transactional consistency when persisting changes.
     ///
     /// # Implementation Notes
@@ -283,14 +320,14 @@ pub trait QuotesTransaction {
     /// quote's aggregate counters (`amount_paid`, `amount_issued`) in the database.
     async fn update_mint_quote(
         &mut self,
-        quote: &mut Acquired<mint::MintQuote>,
+        quote: &mut Self::Locked<mint::MintQuote>,
     ) -> Result<(), Self::Err>;
 
     /// Get [`mint::MeltQuote`] and lock it for update in this transaction
     async fn get_melt_quote(
         &mut self,
         quote_id: &QuoteId,
-    ) -> Result<Option<Acquired<mint::MeltQuote>>, Self::Err>;
+    ) -> Result<Option<Self::Locked<mint::MeltQuote>>, Self::Err>;
 
     /// Add [`mint::MeltQuote`]
     async fn add_melt_quote(&mut self, quote: mint::MeltQuote) -> Result<(), Self::Err>;
@@ -313,7 +350,7 @@ pub trait QuotesTransaction {
     async fn get_melt_quotes_by_request_lookup_id(
         &mut self,
         request_lookup_id: &PaymentIdentifier,
-    ) -> Result<Vec<Acquired<MeltQuote>>, Self::Err>;
+    ) -> Result<Vec<Self::Locked<MeltQuote>>, Self::Err>;
 
     /// Locks a melt quote and all related quotes sharing the same request_lookup_id atomically.
     ///
@@ -343,24 +380,24 @@ pub trait QuotesTransaction {
     async fn lock_melt_quote_and_related(
         &mut self,
         quote_id: &QuoteId,
-    ) -> Result<LockedMeltQuotes, Self::Err>;
+    ) -> Result<LockedMeltQuotes<Self::Locked<MeltQuote>>, Self::Err>;
 
     /// Updates the request lookup id for a melt quote.
     ///
-    /// Requires an [`Acquired`] melt quote to ensure the row is locked before modification.
+    /// Requires a locked melt quote to ensure the row is locked before modification.
     async fn update_melt_quote_request_lookup_id(
         &mut self,
-        quote: &mut Acquired<mint::MeltQuote>,
+        quote: &mut Self::Locked<mint::MeltQuote>,
         new_request_lookup_id: &PaymentIdentifier,
     ) -> Result<(), Self::Err>;
 
     /// Update [`mint::MeltQuote`] state.
     ///
-    /// Requires an [`Acquired`] melt quote to ensure the row is locked before modification.
+    /// Requires a locked melt quote to ensure the row is locked before modification.
     /// Returns the previous state.
     async fn update_melt_quote_state(
         &mut self,
-        quote: &mut Acquired<mint::MeltQuote>,
+        quote: &mut Self::Locked<mint::MeltQuote>,
         new_state: MeltQuoteState,
         payment_proof: Option<String>,
     ) -> Result<MeltQuoteState, Self::Err>;
@@ -369,13 +406,13 @@ pub trait QuotesTransaction {
     async fn get_mint_quote_by_request(
         &mut self,
         request: &str,
-    ) -> Result<Option<Acquired<MintMintQuote>>, Self::Err>;
+    ) -> Result<Option<Self::Locked<MintMintQuote>>, Self::Err>;
 
     /// Get all [`MintMintQuote`]s
     async fn get_mint_quote_by_request_lookup_id(
         &mut self,
         request_lookup_id: &PaymentIdentifier,
-    ) -> Result<Option<Acquired<MintMintQuote>>, Self::Err>;
+    ) -> Result<Option<Self::Locked<MintMintQuote>>, Self::Err>;
 }
 
 /// Mint Quote Database trait
@@ -429,7 +466,7 @@ pub trait QuotesDatabase {
 
 /// Mint Proof Transaction trait
 #[async_trait]
-pub trait ProofsTransaction {
+pub trait ProofsTransaction: LockingTransaction {
     /// Mint Proof Database Error
     type Err: Into<Error> + From<Error>;
 
@@ -442,7 +479,7 @@ pub trait ProofsTransaction {
         proof: Proofs,
         quote_id: Option<QuoteId>,
         operation: &Operation,
-    ) -> Result<Acquired<ProofsWithState>, Self::Err>;
+    ) -> Result<Self::Locked<ProofsWithState>, Self::Err>;
 
     /// Updates the proofs to the given state in the database.
     ///
@@ -450,7 +487,7 @@ pub trait ProofsTransaction {
     /// the new state after the database update succeeds.
     async fn update_proofs_state(
         &mut self,
-        proofs: &mut Acquired<ProofsWithState>,
+        proofs: &mut Self::Locked<ProofsWithState>,
         new_state: State,
     ) -> Result<(), Self::Err>;
 
@@ -458,7 +495,7 @@ pub trait ProofsTransaction {
     async fn get_proofs(
         &mut self,
         ys: &[PublicKey],
-    ) -> Result<Acquired<ProofsWithState>, Self::Err>;
+    ) -> Result<Self::Locked<ProofsWithState>, Self::Err>;
 
     /// Remove [`Proofs`]
     async fn remove_proofs(
@@ -569,7 +606,7 @@ pub trait SignaturesDatabase {
 
 #[async_trait]
 /// Saga Transaction trait
-pub trait SagaTransaction {
+pub trait SagaTransaction: LockingTransaction {
     /// Saga Database Error
     type Err: Into<Error> + From<Error>;
 
@@ -579,7 +616,7 @@ pub trait SagaTransaction {
         operation_id: &uuid::Uuid,
     ) -> Result<Option<mint::Saga>, Self::Err>;
 
-    /// Get a saga by operation ID and mark it as acquired for mutation.
+    /// Get a saga by operation ID and lock it for mutation.
     ///
     /// Implementations must lock the returned row for the lifetime of the
     /// transaction. Saga mutation methods require this marker so callers
@@ -587,22 +624,22 @@ pub trait SagaTransaction {
     async fn get_saga_for_update(
         &mut self,
         operation_id: &uuid::Uuid,
-    ) -> Result<Option<Acquired<mint::Saga>>, Self::Err>;
+    ) -> Result<Option<Self::Locked<mint::Saga>>, Self::Err>;
 
     /// Add saga
     async fn add_saga(&mut self, saga: &mint::Saga) -> Result<(), Self::Err>;
 
-    /// Update the state of an acquired saga.
+    /// Update the state of a locked saga.
     async fn update_acquired_saga(
         &mut self,
-        saga: &mut Acquired<mint::Saga>,
+        saga: &mut Self::Locked<mint::Saga>,
         new_state: mint::SagaStateEnum,
     ) -> Result<(), Self::Err>;
 
-    /// Update an acquired saga state and optional finalization metadata.
+    /// Update a locked saga state and optional finalization metadata.
     async fn update_acquired_saga_with_finalization_data(
         &mut self,
-        saga: &mut Acquired<mint::Saga>,
+        saga: &mut Self::Locked<mint::Saga>,
         new_state: mint::SagaStateEnum,
         finalization_data: Option<&mint::MeltFinalizationData>,
     ) -> Result<(), Self::Err>;
@@ -701,12 +738,20 @@ pub trait Database<Error>:
     + SagaDatabase<Err = Error>
     + CompletedOperationsDatabase<Err = Error>
 {
+    /// The transaction this database begins
+    type Transaction: Transaction<Error> + Send + Sync + 'static;
+
     /// Begins a transaction
-    async fn begin_transaction(&self) -> Result<Box<dyn Transaction<Error> + Send + Sync>, Error>;
+    async fn begin_transaction(&self) -> Result<Box<Self::Transaction>, Error>;
 }
 
-/// Type alias for Mint Database
-pub type DynMintDatabase = std::sync::Arc<dyn Database<Error> + Send + Sync>;
+/// A mint database that can be shared between tasks.
+///
+/// Shorthand for the bounds the mint puts on its storage. It is implemented for
+/// every type that satisfies them.
+pub trait MintStore: Database<Error> + Send + Sync + 'static {}
 
-/// Type alias for Mint Transaction
-pub type DynMintTransaction = Box<dyn Transaction<Error> + Send + Sync>;
+impl<D> MintStore for D where D: Database<Error> + Send + Sync + 'static {}
+
+/// A `T` locked by a transaction of the mint database `D`
+pub type LockedBy<D, T> = <<D as Database<Error>>::Transaction as LockingTransaction>::Locked<T>;

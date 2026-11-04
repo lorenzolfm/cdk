@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use cdk_common::common::PaymentProcessorKey;
-use cdk_common::database::DynMintDatabase;
+use cdk_common::database::mint::prelude::*;
+use cdk_common::database::MintStore;
 use cdk_common::mint::MintQuote;
 use cdk_common::payment::DynMintPayment;
 use cdk_common::util::unix_time;
@@ -16,12 +17,15 @@ use crate::Error;
 /// Minimum delay between payment backend status checks for the same mint quote.
 pub(super) const MINT_QUOTE_PAYMENT_CHECK_INTERVAL_SECS: u64 = 10;
 
-impl Mint {
+impl<D> Mint<D>
+where
+    D: MintStore,
+{
     /// Static implementation of check_mint_quote_paid to avoid circular dependency to the Mint
     pub(crate) async fn check_mint_quote_payments(
-        localstore: DynMintDatabase,
+        localstore: Arc<D>,
         payment_processors: Arc<HashMap<PaymentProcessorKey, DynMintPayment>>,
-        pubsub_manager: Option<Arc<PubSubManager>>,
+        pubsub_manager: Option<Arc<PubSubManager<D>>>,
         quote: &mut MintQuote,
     ) -> Result<(), Error> {
         let state = quote.state();
@@ -109,7 +113,7 @@ impl Mint {
         if new_quote.payment_method.is_bolt11()
             && (current_state == MintQuoteState::Issued || current_state == MintQuoteState::Paid)
         {
-            *quote = new_quote.inner();
+            *quote = new_quote.into_inner();
             return Ok(());
         }
 
@@ -173,7 +177,7 @@ impl Mint {
             }
         }
 
-        *quote = new_quote.inner();
+        *quote = new_quote.into_inner();
 
         Ok(())
     }

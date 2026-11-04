@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use cdk_common::database::mint::Acquired;
+use cdk_common::database::mint::prelude::*;
+use cdk_common::database::{LockedBy, MintStore};
 use cdk_common::mint::{MintQuote, Operation};
 use cdk_common::payment::{
     Bolt11IncomingPaymentOptions, Bolt12IncomingPaymentOptions, CustomIncomingPaymentOptions,
@@ -9,7 +10,7 @@ use cdk_common::payment::{
 use cdk_common::quote_id::QuoteId;
 use cdk_common::util::unix_time;
 use cdk_common::{
-    database, ensure_cdk, Amount, BatchMintRequest, BlindedMessage, CurrencyUnit, Error,
+    ensure_cdk, Amount, BatchMintRequest, BlindedMessage, CurrencyUnit, Error,
     MintQuoteBolt11Response, MintQuoteBolt12Response, MintQuoteOnchainResponse, MintQuoteState,
     MintRequest, MintResponse, NotificationPayload, PaymentMethod, PublicKey,
 };
@@ -128,7 +129,10 @@ impl MintInput {
     }
 }
 
-impl Mint {
+impl<D> Mint<D>
+where
+    D: MintStore,
+{
     /// Validates that a mint request meets all requirements
     ///
     /// Checks that:
@@ -533,8 +537,8 @@ impl Mint {
     #[instrument(skip_all)]
     pub async fn pay_mint_quote(
         &self,
-        tx: &mut Box<dyn database::MintTransaction<database::Error> + Send + Sync>,
-        mint_quote: &mut Acquired<MintQuote>,
+        tx: &mut Box<D::Transaction>,
+        mint_quote: &mut LockedBy<D, MintQuote>,
         wait_payment_response: WaitPaymentResponse,
     ) -> Result<bool, Error> {
         #[cfg(feature = "prometheus")]
@@ -1059,6 +1063,7 @@ mod batch_mint_tests {
     use async_trait::async_trait;
     use bip39::Mnemonic;
     use cdk_common::amount::SplitTarget;
+    use cdk_common::database::mint::prelude::*;
     use cdk_common::mint::MintQuote;
     use cdk_common::nut00::KnownMethod;
     use cdk_common::nuts::PreMintSecrets;
@@ -1079,7 +1084,8 @@ mod batch_mint_tests {
 
     use crate::mint::payment_backend::MINT_QUOTE_PAYMENT_CHECK_INTERVAL_SECS;
     use crate::mint::verification::MAX_CUSTOM_PAYMENT_METHOD_LEN;
-    use crate::mint::{Mint, MintBuilder, MintMeltLimits, MintQuoteRequest};
+    use crate::mint::{MintBuilder, MintMeltLimits, MintQuoteRequest};
+    use crate::test_helpers::mint::TestMint as Mint;
     use crate::types::{FeeReserve, QuoteTTL};
 
     struct OnchainTestBackend {

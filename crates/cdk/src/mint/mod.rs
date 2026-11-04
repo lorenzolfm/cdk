@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use cdk_common::common::{PaymentProcessorKey, QuoteTTL};
-use cdk_common::database::mint::Acquired;
-use cdk_common::database::{self, DynMintAuthDatabase, DynMintDatabase};
+use cdk_common::database::mint::prelude::*;
+use cdk_common::database::{DynMintAuthDatabase, LockedBy, MintStore};
 use cdk_common::nuts::{BlindSignature, BlindedMessage, CurrencyUnit, Id};
 use cdk_common::payment::{DynMintPayment, WaitPaymentResponse};
 pub use cdk_common::quote_id::QuoteId;
@@ -55,21 +55,23 @@ const CDK_MINT_CONFIG_KV_KEY: &str = "mint_info";
 const CDK_MINT_QUOTE_TTL_KV_KEY: &str = "quote_ttl";
 
 /// Cashu Mint
-#[derive(Clone)]
-pub struct Mint {
+pub struct Mint<D>
+where
+    D: MintStore,
+{
     /// Signatory backend.
     ///
     /// It is implemented in the cdk-signatory crate, and it can be embedded in the mint or it can
     /// be a gRPC client to a remote signatory server.
     signatory: Arc<dyn Signatory + Send + Sync>,
     /// Mint Storage backend
-    localstore: DynMintDatabase,
+    localstore: Arc<D>,
     /// Auth Storage backend (only available with auth feature)
     auth_localstore: Option<DynMintAuthDatabase>,
     /// Payment processors for mint
     payment_processors: Arc<HashMap<PaymentProcessorKey, DynMintPayment>>,
     /// Subscription manager
-    pubsub_manager: Arc<PubSubManager>,
+    pubsub_manager: Arc<PubSubManager<D>>,
     oidc_client: Option<OidcClient>,
     /// In-memory keyset
     keysets: Arc<ArcSwap<Vec<SignatoryKeySet>>>,
@@ -97,7 +99,32 @@ pub struct Mint {
     max_outputs: usize,
 }
 
-impl std::fmt::Debug for Mint {
+impl<D> Clone for Mint<D>
+where
+    D: MintStore,
+{
+    fn clone(&self) -> Self {
+        Self {
+            signatory: self.signatory.clone(),
+            localstore: self.localstore.clone(),
+            auth_localstore: self.auth_localstore.clone(),
+            payment_processors: self.payment_processors.clone(),
+            pubsub_manager: self.pubsub_manager.clone(),
+            oidc_client: self.oidc_client.clone(),
+            keysets: self.keysets.clone(),
+            keyset_store_lock: self.keyset_store_lock.clone(),
+            melt_quote_locks: self.melt_quote_locks.clone(),
+            task_state: self.task_state.clone(),
+            max_inputs: self.max_inputs,
+            max_outputs: self.max_outputs,
+        }
+    }
+}
+
+impl<D> std::fmt::Debug for Mint<D>
+where
+    D: MintStore,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Mint").finish_non_exhaustive()
     }
@@ -121,17 +148,23 @@ struct TaskState {
 ///
 /// Holds the state the handlers need as fields, so `on_message` reads
 /// `&self.field` instead of the closure-based supervisor's per-item cloning.
-struct PaymentWaiter {
+struct PaymentWaiter<D>
+where
+    D: MintStore,
+{
     /// Identifies the processor in the supervisor's logs (unit and method).
     name: String,
-    mint: Arc<Mint>,
+    mint: Arc<Mint<D>>,
     processor: DynMintPayment,
-    localstore: DynMintDatabase,
-    pubsub_manager: Arc<PubSubManager>,
+    localstore: Arc<D>,
+    pubsub_manager: Arc<PubSubManager<D>>,
 }
 
 #[async_trait::async_trait]
-impl SupervisedStream for PaymentWaiter {
+impl<D> SupervisedStream for PaymentWaiter<D>
+where
+    D: MintStore,
+{
     type Item = cdk_common::payment::Event;
     // `DynMintPayment::wait_payment_event` fails with `Error`; its stream is
     // already decoded and never yields a stream-level error, so wrap items in
@@ -224,7 +257,10 @@ impl SupervisedStream for PaymentWaiter {
     }
 }
 
-impl Mint {
+impl<D> Mint<D>
+where
+    D: MintStore,
+{
     /// Returns the process-local coordination lock for a melt quote.
     pub(super) async fn melt_quote_lock(&self, quote_id: &QuoteId) -> Arc<Mutex<()>> {
         let mut locks = self.melt_quote_locks.lock().await;
@@ -243,7 +279,7 @@ impl Mint {
     pub async fn new(
         mint_info: MintInfo,
         signatory: Arc<dyn Signatory + Send + Sync>,
-        localstore: DynMintDatabase,
+        localstore: Arc<D>,
         payment_processors: HashMap<PaymentProcessorKey, DynMintPayment>,
         max_inputs: usize,
         max_outputs: usize,
@@ -264,7 +300,7 @@ impl Mint {
     pub async fn new_with_auth(
         mint_info: MintInfo,
         signatory: Arc<dyn Signatory + Send + Sync>,
-        localstore: DynMintDatabase,
+        localstore: Arc<D>,
         auth_localstore: DynMintAuthDatabase,
         payment_processors: HashMap<PaymentProcessorKey, DynMintPayment>,
         max_inputs: usize,
@@ -287,7 +323,7 @@ impl Mint {
     async fn new_internal(
         mint_info: MintInfo,
         signatory: Arc<dyn Signatory + Send + Sync>,
-        localstore: DynMintDatabase,
+        localstore: Arc<D>,
         auth_localstore: Option<DynMintAuthDatabase>,
         payment_processors: HashMap<PaymentProcessorKey, DynMintPayment>,
         max_inputs: usize,
@@ -718,7 +754,7 @@ impl Mint {
 
     /// Localstore
     #[inline]
-    pub fn localstore(&self) -> DynMintDatabase {
+    pub fn localstore(&self) -> Arc<D> {
         Arc::clone(&self.localstore)
     }
 
@@ -730,7 +766,7 @@ impl Mint {
 
     /// Pub Sub manager
     #[inline]
-    pub fn pubsub_manager(&self) -> Arc<PubSubManager> {
+    pub fn pubsub_manager(&self) -> Arc<PubSubManager<D>> {
         Arc::clone(&self.pubsub_manager)
     }
 
@@ -896,10 +932,10 @@ impl Mint {
 
     #[instrument(skip_all)]
     async fn wait_for_paid_invoices(
-        mint: Arc<Mint>,
+        mint: Arc<Mint<D>>,
         payment_processors: &HashMap<PaymentProcessorKey, DynMintPayment>,
-        localstore: DynMintDatabase,
-        pubsub_manager: Arc<PubSubManager>,
+        localstore: Arc<D>,
+        pubsub_manager: Arc<PubSubManager<D>>,
         shutdown: Arc<Notify>,
     ) -> Result<(), Error> {
         let mut join_set = JoinSet::new();
@@ -977,10 +1013,10 @@ impl Mint {
     #[instrument(skip_all)]
     async fn wait_for_processor_payments(
         name: String,
-        mint: Arc<Mint>,
+        mint: Arc<Mint<D>>,
         processor: DynMintPayment,
-        localstore: DynMintDatabase,
-        pubsub_manager: Arc<PubSubManager>,
+        localstore: Arc<D>,
+        pubsub_manager: Arc<PubSubManager<D>>,
         shutdown: Arc<Notify>,
     ) -> Result<(), Error> {
         let mut waiter = PaymentWaiter {
@@ -998,9 +1034,9 @@ impl Mint {
 
     #[instrument(skip_all)]
     pub(crate) async fn handle_successful_melt_payment_event(
-        mint: &Arc<Mint>,
-        localstore: &DynMintDatabase,
-        pubsub_manager: &Arc<PubSubManager>,
+        mint: &Arc<Mint<D>>,
+        localstore: &Arc<D>,
+        pubsub_manager: &Arc<PubSubManager<D>>,
         quote_id: &QuoteId,
         payment_response: cdk_common::payment::MakePaymentResponse,
     ) -> Result<(), Error> {
@@ -1064,9 +1100,9 @@ impl Mint {
 
     #[instrument(skip_all)]
     pub(crate) async fn handle_failed_melt_payment_event(
-        mint: &Arc<Mint>,
-        localstore: &DynMintDatabase,
-        pubsub_manager: &Arc<PubSubManager>,
+        mint: &Arc<Mint<D>>,
+        localstore: &Arc<D>,
+        pubsub_manager: &Arc<PubSubManager<D>>,
         quote_id: &QuoteId,
     ) -> Result<(), Error> {
         let quote_lock = mint.melt_quote_lock(quote_id).await;
@@ -1129,8 +1165,8 @@ impl Mint {
     /// This is a helper function that can be called with just the required components
     #[instrument(skip_all)]
     async fn handle_payment_notification(
-        localstore: &DynMintDatabase,
-        pubsub_manager: &Arc<PubSubManager>,
+        localstore: &Arc<D>,
+        pubsub_manager: &Arc<PubSubManager<D>>,
         wait_payment_response: WaitPaymentResponse,
     ) -> Result<(), Error> {
         if wait_payment_response.payment_amount.value() == 0 {
@@ -1193,8 +1229,8 @@ impl Mint {
     /// be published **after** the enclosing transaction commits.
     #[instrument(skip_all)]
     async fn handle_mint_quote_payment(
-        tx: &mut Box<dyn database::MintTransaction<database::Error> + Send + Sync>,
-        mint_quote: &mut Acquired<MintQuote>,
+        tx: &mut Box<D::Transaction>,
+        mint_quote: &mut LockedBy<D, MintQuote>,
         wait_payment_response: WaitPaymentResponse,
     ) -> Result<bool, Error> {
         tracing::debug!(
@@ -1508,7 +1544,6 @@ impl Mint {
 
 #[cfg(test)]
 mod tests {
-
     use std::str::FromStr;
     use std::sync::Arc;
 
@@ -1526,7 +1561,7 @@ mod tests {
 
     use super::*;
     use crate::mint::melt::melt_saga::{MeltSaga, PaymentOutcome};
-    use crate::test_helpers::mint::{create_test_mint, mint_test_proofs};
+    use crate::test_helpers::mint::{create_test_mint, mint_test_proofs, TestMint as Mint};
 
     #[derive(Default)]
     struct MintConfig<'a> {
@@ -2531,7 +2566,7 @@ mod tests {
         assert!(sagas.iter().any(|s| s.operation_id == operation_id));
     }
 
-    async fn create_test_melt_quote(mint: &crate::mint::Mint, amount: Amount) -> MeltQuote {
+    async fn create_test_melt_quote(mint: &Mint, amount: Amount) -> MeltQuote {
         let fake_description = FakeInvoiceDescription {
             pay_invoice_state: MeltQuoteState::Paid,
             check_payment_state: MeltQuoteState::Paid,
@@ -2567,7 +2602,7 @@ mod tests {
         cdk_common::nuts::MeltRequest::new(quote.id.clone(), proofs.clone(), None)
     }
 
-    async fn assert_single_melt_saga_operation_id(mint: &crate::mint::Mint) -> uuid::Uuid {
+    async fn assert_single_melt_saga_operation_id(mint: &Mint) -> uuid::Uuid {
         let sagas = mint
             .localstore
             .get_incomplete_sagas(OperationKind::Melt)

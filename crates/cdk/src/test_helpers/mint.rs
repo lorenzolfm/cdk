@@ -19,6 +19,12 @@ use cdk_fake_wallet::FakeWallet;
 use tokio::time::sleep;
 
 use crate::mint::{Mint, MintBuilder, MintMeltLimits};
+
+/// The database the unit tests run on
+pub type TestDb = cdk_sqlite::mint::MintSqliteDatabase;
+
+/// The mint the unit tests run on
+pub type TestMint = Mint<TestDb>;
 use crate::types::{FeeReserve, QuoteTTL};
 use crate::Error;
 
@@ -73,7 +79,7 @@ pub(crate) fn should_fail_for(operation: &str) -> bool {
 ///     // Use the mint for testing
 /// }
 /// ```
-pub async fn create_test_mint() -> Result<Mint, Error> {
+pub async fn create_test_mint() -> Result<TestMint, Error> {
     let db = Arc::new(cdk_sqlite::mint::memory::empty().await?);
 
     let mut mint_builder = MintBuilder::new(db.clone());
@@ -131,7 +137,7 @@ pub async fn create_test_mint() -> Result<Mint, Error> {
 ///
 /// * `mint` - The test mint to use for creating proofs
 /// * `amount` - The total amount to create proofs for
-pub async fn mint_test_proofs(mint: &Mint, amount: Amount) -> Result<Proofs, Error> {
+pub async fn mint_test_proofs(mint: &TestMint, amount: Amount) -> Result<Proofs, Error> {
     // Just use fund_mint_with_proofs which creates proofs via swap
     let mint_quote: MintQuoteBolt11Response<_> = mint
         .get_mint_quote(
@@ -211,7 +217,7 @@ pub async fn mint_test_proofs(mint: &Mint, amount: Amount) -> Result<Proofs, Err
 /// - Vector of blinded messages
 /// - PreMintSecrets (needed to construct proofs later)
 pub async fn create_test_blinded_messages(
-    mint: &Mint,
+    mint: &TestMint,
     amount: Amount,
 ) -> Result<(Vec<BlindedMessage>, PreMintSecrets), Error> {
     let keyset_id = get_active_keyset_id(mint).await?;
@@ -225,7 +231,7 @@ pub async fn create_test_blinded_messages(
 }
 
 /// Gets the active keyset ID from the mint.
-pub async fn get_active_keyset_id(mint: &Mint) -> Result<Id, Error> {
+pub async fn get_active_keyset_id(mint: &TestMint) -> Result<Id, Error> {
     let keys = mint
         .pubkeys()
         .keysets

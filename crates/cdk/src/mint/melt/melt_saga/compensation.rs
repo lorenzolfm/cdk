@@ -3,8 +3,10 @@
 //! When a saga step fails, compensating actions are executed in reverse order (LIFO)
 //! to undo all completed steps and restore the database to its pre-saga state.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
-use cdk_common::database::DynMintDatabase;
+use cdk_common::database::MintStore;
 use cdk_common::{Error, PublicKey, QuoteId};
 use tracing::instrument;
 use uuid::Uuid;
@@ -16,8 +18,11 @@ use crate::mint::subscription::PubSubManager;
 /// Compensating actions are registered as steps complete and executed in reverse
 /// order (LIFO) if the saga fails. Each action should be idempotent.
 #[async_trait]
-pub trait CompensatingAction: Send + Sync {
-    async fn execute(&self, db: &DynMintDatabase, pubsub: &PubSubManager) -> Result<(), Error>;
+pub trait CompensatingAction<D>: Send + Sync
+where
+    D: MintStore,
+{
+    async fn execute(&self, db: &Arc<D>, pubsub: &PubSubManager<D>) -> Result<(), Error>;
     fn name(&self) -> &'static str;
 }
 
@@ -46,9 +51,12 @@ pub struct RemoveMeltSetup {
 }
 
 #[async_trait]
-impl CompensatingAction for RemoveMeltSetup {
+impl<D> CompensatingAction<D> for RemoveMeltSetup
+where
+    D: MintStore,
+{
     #[instrument(skip_all)]
-    async fn execute(&self, db: &DynMintDatabase, pubsub: &PubSubManager) -> Result<(), Error> {
+    async fn execute(&self, db: &Arc<D>, pubsub: &PubSubManager<D>) -> Result<(), Error> {
         tracing::info!(
             "Compensation: Removing melt setup for quote {} ({} proofs, {} blinded messages, saga {})",
             self.quote_id,

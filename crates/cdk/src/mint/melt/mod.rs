@@ -4,7 +4,8 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use cdk_common::database::DynMintDatabase;
+use cdk_common::database::mint::prelude::*;
+use cdk_common::database::MintStore;
 use cdk_common::melt::MeltQuoteRequest;
 use cdk_common::mint::MeltPaymentRequest;
 use cdk_common::nut00::KnownMethod;
@@ -120,10 +121,13 @@ fn validate_custom_quote_fields(request: &str, extra: &serde_json::Value) -> Res
     Ok(())
 }
 
-impl Mint {
+impl<D> Mint<D>
+where
+    D: MintStore,
+{
     /// Load a quote, keeping its response pending until change and cleanup commit.
     pub(super) async fn load_melt_quote_for_response(
-        localstore: &DynMintDatabase,
+        localstore: &Arc<D>,
         quote_id: &QuoteId,
     ) -> Result<Option<MeltQuote>, Error> {
         let mut tx = localstore.begin_transaction().await?;
@@ -132,7 +136,7 @@ impl Mint {
         let mut quote = tx
             .get_melt_quote(quote_id)
             .await?
-            .map(|quote| quote.inner());
+            .map(|quote| quote.into_inner());
         if let Some(quote) = quote.as_mut() {
             if quote.state == MeltQuoteState::Paid {
                 // Finalization deletes the request atomically with change
@@ -166,7 +170,7 @@ impl Mint {
     /// `Error::PendingMeltTimeout` to this waiter without changing durable
     /// state.
     async fn load_settled_melt_response(
-        localstore: &DynMintDatabase,
+        localstore: &Arc<D>,
         quote_id: &QuoteId,
     ) -> Result<Option<MeltQuoteResponse<QuoteId>>, Error> {
         let quote = Self::load_melt_quote_for_response(localstore, quote_id)

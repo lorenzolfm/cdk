@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
 use anyhow::Result;
+use cdk_common::database::mint::prelude::*;
 use cdk_common::mint::{MeltPaymentRequest, MeltQuote, Operation, OperationKind};
 use cdk_common::quote_id::QuoteId;
 use cdk_common::{Amount, BlindedMessage, CurrencyUnit, Id, PaymentMethod, SecretKey};
