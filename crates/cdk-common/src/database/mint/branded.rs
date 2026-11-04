@@ -124,9 +124,34 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! A locked row overwritten with a value read outside the transaction:
+//!
+//! ```compile_fail
+//! # use cdk_common::database::mint::branded::{make_guard, BrandedTransaction};
+//! # use cdk_common::database::{DynMintDatabase, Error};
+//! # use cdk_common::payment::PaymentIdentifier;
+//! # use cdk_common::QuoteId;
+//! # async fn example(
+//! #     db: DynMintDatabase,
+//! #     lookup_id: PaymentIdentifier,
+//! #     quote_id: QuoteId,
+//! # ) -> Result<(), Error> {
+//! make_guard!(guard);
+//! let mut tx = BrandedTransaction::begin(&db, guard).await?;
+//!
+//! let mut quote = tx
+//!     .get_mint_quote_by_request_lookup_id(&lookup_id)
+//!     .await?
+//!     .ok_or(Error::UnknownQuote)?;
+//! *quote = db.get_mint_quote(&quote_id).await?.ok_or(Error::UnknownQuote)?;
+//! tx.update_mint_quote(&mut quote).await?;
+//! # Ok(())
+//! # }
+//! ```
 
 use core::fmt;
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 
 use generativity::Id;
 pub use generativity::{make_guard, Guard};
@@ -134,7 +159,9 @@ pub use generativity::{make_guard, Guard};
 use super::{Acquired, DynMintDatabase, DynMintTransaction};
 use crate::database::Error;
 use crate::mint::MintQuote;
+use crate::nuts::CurrencyUnit;
 use crate::payment::PaymentIdentifier;
+use crate::Amount;
 
 /// A row locked by the [`BrandedTransaction`] with the same `'id`.
 ///
@@ -155,10 +182,15 @@ impl<T> Deref for BrandedAcquired<'_, T> {
     }
 }
 
-impl<T> DerefMut for BrandedAcquired<'_, T> {
-    /// Returns a mutable reference to the inner resource.
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
+impl BrandedAcquired<'_, MintQuote> {
+    /// Records a payment on the locked quote. See [`MintQuote::add_payment`].
+    pub fn add_payment(
+        &mut self,
+        amount: Amount<CurrencyUnit>,
+        payment_id: String,
+        time: Option<u64>,
+    ) -> Result<(), crate::Error> {
+        self.inner.add_payment(amount, payment_id, time)
     }
 }
 
