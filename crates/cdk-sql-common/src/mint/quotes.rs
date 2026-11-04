@@ -909,7 +909,28 @@ where
             return Ok(());
         }
 
-        for payment in changes.payments.take().unwrap_or_default() {
+        let payments = changes.payments.take().unwrap_or_default();
+        let issuances = changes.issuances.take().unwrap_or_default();
+
+        // The counters the stored row must still hold for these changes to apply to it.
+        let expected_paid = payments
+            .iter()
+            .try_fold(quote.amount_paid().value(), |total, payment| {
+                total.checked_sub(payment.amount.value())
+            });
+        let expected_issued = issuances
+            .iter()
+            .try_fold(quote.amount_issued().value(), |total, amount| {
+                total.checked_sub(amount.to_u64())
+            });
+        let (Some(expected_paid), Some(expected_issued)) = (expected_paid, expected_issued) else {
+            return Err(Error::Internal(format!(
+                "mint quote {} has changes larger than its totals",
+                quote.id
+            )));
+        };
+
+        for payment in payments {
             query(
                 r#"
                 INSERT INTO mint_quote_payments
@@ -931,7 +952,7 @@ where
 
         let current_time = unix_time();
 
-        for amount_issued in changes.issuances.take().unwrap_or_default() {
+        for amount_issued in issuances {
             query(
                 r#"
                 INSERT INTO mint_quote_issued
@@ -946,7 +967,7 @@ where
             .await?;
         }
 
-        query(
+        let affected = query(
             r#"
             UPDATE
                 mint_quote
@@ -959,6 +980,8 @@ where
                 END
             WHERE
                 id = :quote_id
+                AND amount_paid = :expected_paid
+                AND amount_issued = :expected_issued
             "#,
         )?
         .bind("quote_id", quote.id.to_string())
@@ -967,12 +990,18 @@ where
             i64::try_from(quote.amount_issued().to_u64())?,
         )
         .bind("amount_paid", i64::try_from(quote.amount_paid().to_u64())?)
+        .bind("expected_paid", i64::try_from(expected_paid)?)
+        .bind("expected_issued", i64::try_from(expected_issued)?)
         .bind("current_time", i64::try_from(current_time)?)
         .execute(&self.inner)
         .await
         .inspect_err(|err| {
             tracing::error!("SQL could not update mint quote accounting: {}", err);
         })?;
+
+        if affected != 1 {
+            return Err(Error::ConcurrentUpdate);
+        }
 
         let updated_at = query(
             r#"
@@ -1114,12 +1143,18 @@ where
         quote: &mut Acquired<mint::MeltQuote>,
         new_request_lookup_id: &PaymentIdentifier,
     ) -> Result<(), Self::Err> {
-        query(r#"UPDATE melt_quote SET request_lookup_id = :new_req_id, request_lookup_id_kind = :new_kind WHERE id = :id"#)?
+        let affected = query(r#"UPDATE melt_quote SET request_lookup_id = :new_req_id, request_lookup_id_kind = :new_kind WHERE id = :id AND state = :state"#)?
             .bind("new_req_id", new_request_lookup_id.to_string())
             .bind("new_kind", new_request_lookup_id.kind())
             .bind("id", quote.id.to_string())
+            .bind("state", quote.state.to_string())
             .execute(&self.inner)
             .await?;
+
+        if affected != 1 {
+            return Err(Error::ConcurrentUpdate);
+        }
+
         quote.request_lookup_id = Some(new_request_lookup_id.clone());
         Ok(())
     }
@@ -1144,8 +1179,9 @@ where
             let current_time = unix_time();
             quote.paid_time = Some(current_time);
             quote.payment_proof = payment_proof.clone();
-            query(r#"UPDATE melt_quote SET state = :state, paid_time = :paid_time, payment_proof = :payment_proof, fee_reserve = :fee_reserve, estimated_blocks = :estimated_blocks, selected_fee_index = :selected_fee_index WHERE id = :id"#)?
+            query(r#"UPDATE melt_quote SET state = :state, paid_time = :paid_time, payment_proof = :payment_proof, fee_reserve = :fee_reserve, estimated_blocks = :estimated_blocks, selected_fee_index = :selected_fee_index WHERE id = :id AND state = :old_state"#)?
                 .bind("state", state.to_string())
+                .bind("old_state", old_state.to_string())
                 .bind("paid_time", i64::try_from(current_time)?)
                 .bind("payment_proof", payment_proof)
                 .bind("fee_reserve", i64::try_from(quote.fee_reserve().value())?)
@@ -1155,8 +1191,9 @@ where
                 .execute(&self.inner)
                 .await
         } else {
-            query(r#"UPDATE melt_quote SET state = :state, fee_reserve = :fee_reserve, estimated_blocks = :estimated_blocks, selected_fee_index = :selected_fee_index WHERE id = :id"#)?
+            query(r#"UPDATE melt_quote SET state = :state, fee_reserve = :fee_reserve, estimated_blocks = :estimated_blocks, selected_fee_index = :selected_fee_index WHERE id = :id AND state = :old_state"#)?
                 .bind("state", state.to_string())
+                .bind("old_state", old_state.to_string())
                 .bind("fee_reserve", i64::try_from(quote.fee_reserve().value())?)
                 .bind("estimated_blocks", quote.estimated_blocks.map(i64::from))
                 .bind("selected_fee_index", quote.selected_fee_index.map(i64::from))
@@ -1166,7 +1203,8 @@ where
         };
 
         match rec {
-            Ok(_) => {}
+            Ok(1) => {}
+            Ok(_) => return Err(Error::ConcurrentUpdate),
             Err(err) => {
                 tracing::error!("SQLite Could not update melt quote");
                 return Err(err);
