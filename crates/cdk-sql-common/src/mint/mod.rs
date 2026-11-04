@@ -24,6 +24,7 @@ mod auth;
 mod completed_operations;
 mod keys;
 mod keyvalue;
+mod locking;
 mod proofs;
 mod quotes;
 mod saga;

@@ -6,11 +6,10 @@ use std::str::FromStr;
 use async_trait::async_trait;
 use cdk_common::database::mint::Acquired;
 use cdk_common::database::{self, Error, MintProofsDatabase};
-use cdk_common::mint::{Operation, ProofsWithState};
+use cdk_common::mint::ProofsWithState;
 use cdk_common::nut00::ProofsMethods;
 use cdk_common::quote_id::QuoteId;
 use cdk_common::secret::Secret;
-use cdk_common::util::unix_time;
 use cdk_common::{Amount, Id, Proof, Proofs, PublicKey, State};
 
 use super::{SQLMintDatabase, SQLTransaction};
@@ -116,76 +115,6 @@ where
     RM: DatabasePool + 'static,
 {
     type Err = Error;
-
-    /// Adds proofs to the database with initial state `Unspent`.
-    ///
-    /// This method first checks if any of the proofs already exist in the database.
-    /// If a proof exists and is spent, returns [`Error::AttemptUpdateSpentProof`].
-    /// If a proof exists in any other state, returns [`Error::Duplicate`].
-    ///
-    /// On success, returns the proofs wrapped in [`Acquired<ProofsWithState>`] with
-    /// state set to `Unspent`, indicating the rows are locked for the duration of
-    /// the transaction.
-    async fn add_proofs(
-        &mut self,
-        proofs: Proofs,
-        quote_id: Option<QuoteId>,
-        operation: &Operation,
-    ) -> Result<Acquired<ProofsWithState>, Self::Err> {
-        let current_time = unix_time();
-
-        let mut ordered_proofs = proofs
-            .iter()
-            .map(|proof| Ok((proof.y()?.to_bytes().to_vec(), proof)))
-            .collect::<Result<Vec<_>, Error>>()?;
-        ordered_proofs.sort_unstable_by(|(left_y, _), (right_y, _)| left_y.cmp(right_y));
-
-        // Check any previous proof, this query should return None in order to proceed storing
-        // Any result here would error
-        match query(r#"SELECT state FROM proof WHERE y IN (:ys) ORDER BY y LIMIT 1 FOR UPDATE"#)?
-            .bind_vec(
-                "ys",
-                ordered_proofs.iter().map(|(y, _)| y.clone()).collect(),
-            )?
-            .pluck(&self.inner)
-            .await?
-            .map(|state| Ok::<_, Error>(column_as_string!(&state, State::from_str)))
-            .transpose()?
-        {
-            Some(State::Spent) => Err(database::Error::AttemptUpdateSpentProof),
-            Some(_) => Err(database::Error::Duplicate),
-            None => Ok(()), // no previous record
-        }?;
-
-        for (y, proof) in ordered_proofs {
-            query(
-                r#"
-                  INSERT INTO proof
-                  (y, amount, keyset_id, secret, c, witness, state, quote_id, created_time, operation_kind, operation_id)
-                  VALUES
-                  (:y, :amount, :keyset_id, :secret, :c, :witness, :state, :quote_id, :created_time, :operation_kind, :operation_id)
-                  "#,
-            )?
-            .bind("y", y)
-            .bind("amount", i64::try_from(proof.amount.to_u64())?)
-            .bind("keyset_id", proof.keyset_id.to_string())
-            .bind("secret", proof.secret.to_string())
-            .bind("c", proof.c.to_bytes().to_vec())
-            .bind(
-                "witness",
-                proof.witness.clone().and_then(|w| serde_json::to_string(&w).inspect_err(|e| tracing::error!("Failed to serialize witness: {:?}", e)).ok()),
-            )
-            .bind("state", "UNSPENT".to_string())
-            .bind("quote_id", quote_id.clone().map(|q| q.to_string()))
-            .bind("created_time", i64::try_from(current_time)?)
-            .bind("operation_kind", operation.kind().to_string())
-            .bind("operation_id", operation.id().to_string())
-            .execute(&self.inner)
-            .await?;
-        }
-
-        Ok(ProofsWithState::new(proofs, State::Unspent).into())
-    }
 
     /// Updates all proofs to the given state in the database.
     ///
@@ -362,61 +291,6 @@ where
             ))
         })
         .collect::<Result<Vec<_>, _>>()?)
-    }
-
-    async fn get_proofs(
-        &mut self,
-        ys: &[PublicKey],
-    ) -> Result<Acquired<ProofsWithState>, Self::Err> {
-        let rows = query(
-            r#"
-             SELECT
-                 keyset_id,
-                 amount,
-                 secret,
-                 c,
-                 witness,
-                 state
-             FROM
-                 proof
-             WHERE
-                 y IN (:ys)
-             ORDER BY y
-             FOR UPDATE
-             "#,
-        )?
-        .bind_vec("ys", ys.iter().map(|y| y.to_bytes().to_vec()).collect())?
-        .fetch_all(&self.inner)
-        .await?;
-
-        if rows.is_empty() || rows.len() != ys.len() {
-            return Err(database::Error::ProofNotFound);
-        }
-
-        let results: Vec<(Proof, State)> = rows
-            .into_iter()
-            .map(sql_row_to_proof_with_state)
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let mut proofs = Vec::with_capacity(results.len());
-        let mut first_state: Option<State> = None;
-
-        for (proof, state) in results {
-            if let Some(first) = first_state {
-                if first != state {
-                    return Err(database::Error::Internal(
-                        "Proofs have inconsistent states".to_string(),
-                    ));
-                }
-            } else {
-                first_state = Some(state);
-            }
-
-            proofs.push(proof);
-        }
-
-        let state = first_state.unwrap_or(State::Unspent);
-        Ok(ProofsWithState::new(proofs, state).into())
     }
 }
 

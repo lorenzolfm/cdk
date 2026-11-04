@@ -19,11 +19,12 @@ pub type DynKVStore = std::sync::Arc<dyn KVStore<Err = Error> + Send + Sync>;
 
 #[cfg(feature = "mint")]
 pub use mint::{
-    Database as MintDatabase, DynMintDatabase, DynMintTransaction,
-    KeysDatabase as MintKeysDatabase, KeysDatabaseTransaction as MintKeyDatabaseTransaction,
-    ProofsDatabase as MintProofsDatabase, ProofsTransaction as MintProofsTransaction,
-    QuotesDatabase as MintQuotesDatabase, QuotesTransaction as MintQuotesTransaction,
-    SignaturesDatabase as MintSignaturesDatabase,
+    AcquireTransaction as MintAcquireTransaction, Database as MintDatabase, DynMintDatabase,
+    DynMintTransaction, KeysDatabase as MintKeysDatabase,
+    KeysDatabaseTransaction as MintKeyDatabaseTransaction,
+    LockingTransaction as MintLockingTransaction, ProofsDatabase as MintProofsDatabase,
+    ProofsTransaction as MintProofsTransaction, QuotesDatabase as MintQuotesDatabase,
+    QuotesTransaction as MintQuotesTransaction, SignaturesDatabase as MintSignaturesDatabase,
     SignaturesTransaction as MintSignatureTransaction, Transaction as MintTransaction,
 };
 #[cfg(feature = "mint")]
