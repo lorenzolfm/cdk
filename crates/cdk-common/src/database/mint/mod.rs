@@ -281,6 +281,10 @@ pub trait QuotesTransaction {
     /// Implementations should call [`mint::MintQuote::take_changes`] to retrieve pending
     /// changes, then persist each payment and issuance record, and finally update the
     /// quote's aggregate counters (`amount_paid`, `amount_issued`) in the database.
+    ///
+    /// The counters must only be updated if the stored row still holds the values the quote
+    /// had before these changes. Otherwise return [`Error::ConcurrentUpdate`], after which the
+    /// caller must roll back the transaction.
     async fn update_mint_quote(
         &mut self,
         quote: &mut Acquired<mint::MintQuote>,
@@ -348,6 +352,8 @@ pub trait QuotesTransaction {
     /// Updates the request lookup id for a melt quote.
     ///
     /// Requires an [`Acquired`] melt quote to ensure the row is locked before modification.
+    /// Returns [`Error::ConcurrentUpdate`] if the stored state no longer matches the quote,
+    /// after which the caller must roll back the transaction.
     async fn update_melt_quote_request_lookup_id(
         &mut self,
         quote: &mut Acquired<mint::MeltQuote>,
@@ -357,7 +363,8 @@ pub trait QuotesTransaction {
     /// Update [`mint::MeltQuote`] state.
     ///
     /// Requires an [`Acquired`] melt quote to ensure the row is locked before modification.
-    /// Returns the previous state.
+    /// Returns the previous state, or [`Error::ConcurrentUpdate`] if the stored state no longer
+    /// matches the quote, after which the caller must roll back the transaction.
     async fn update_melt_quote_state(
         &mut self,
         quote: &mut Acquired<mint::MeltQuote>,
@@ -448,6 +455,9 @@ pub trait ProofsTransaction {
     ///
     /// Also updates the `state` field on the [`ProofsWithState`] wrapper to reflect
     /// the new state after the database update succeeds.
+    ///
+    /// Returns [`Error::ConcurrentUpdate`] if any stored proof is no longer in the wrapper's
+    /// state, after which the caller must roll back the transaction.
     async fn update_proofs_state(
         &mut self,
         proofs: &mut Acquired<ProofsWithState>,

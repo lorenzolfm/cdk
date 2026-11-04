@@ -1915,6 +1915,298 @@ where
     tx.commit().await.unwrap();
 }
 
+/// A mint quote with no payments, already stored in the database.
+async fn stored_mint_quote<DB>(db: &DB) -> MintQuote
+where
+    DB: Database<Error> + KeysDatabase<Err = Error>,
+{
+    let mint_quote = MintQuote::new(
+        None,
+        unique_string(),
+        cashu::CurrencyUnit::Sat,
+        None,
+        0,
+        PaymentIdentifier::CustomId(unique_string()),
+        None,
+        Amount::new(0, cashu::CurrencyUnit::Sat),
+        Amount::new(0, cashu::CurrencyUnit::Sat),
+        cashu::PaymentMethod::Known(KnownMethod::Bolt12),
+        0,
+        0,
+        vec![],
+        vec![],
+        None,
+    );
+
+    let mut tx = Database::begin_transaction(db).await.unwrap();
+    tx.add_mint_quote(mint_quote.clone()).await.unwrap();
+    tx.commit().await.unwrap();
+
+    mint_quote
+}
+
+/// A melt quote in `Unpaid`, already stored in the database.
+async fn stored_melt_quote<DB>(db: &DB) -> MeltQuote
+where
+    DB: Database<Error> + KeysDatabase<Err = Error>,
+{
+    let melt_quote = MeltQuote::new(
+        None,
+        MeltPaymentRequest::Bolt11 {
+            bolt11: "lnbc330n1p5d85skpp5344v3ktclujsjl3h09wgsfm7zytumr7h7zhrl857f5w8nv0a52zqdqqcqzzsxqyz5vqrzjqvueefmrckfdwyyu39m0lf24sqzcr9vcrmxrvgfn6empxz7phrjxvrttncqq0lcqqyqqqqlgqqqqqqgq2qsp5j3rrg8kvpemqxtf86j8tjm90wq77c7ende4e5qmrerq4xsg02vhq9qxpqysgqjltywgyk6uc5qcgwh8xnzmawl2tjlhz8d28tgp3yx8xwtz76x0jqkfh6mmq70hervjxs0keun7ur0spldgll29l0dnz3md50d65sfqqqwrwpsu".parse().unwrap()
+        },
+        cashu::CurrencyUnit::Sat,
+        Amount::new(100, cashu::CurrencyUnit::Sat),
+        Amount::new(10, cashu::CurrencyUnit::Sat),
+        0,
+        Some(PaymentIdentifier::CustomId(unique_string())),
+        None,
+        cashu::PaymentMethod::Known(KnownMethod::Bolt11),
+        None,
+        None,
+    );
+
+    let mut tx = Database::begin_transaction(db).await.unwrap();
+    tx.add_melt_quote(melt_quote.clone()).await.unwrap();
+    tx.commit().await.unwrap();
+
+    melt_quote
+}
+
+/// A mint quote kept past its transaction can't overwrite a payment recorded since.
+pub async fn update_mint_quote_refuses_stale_amount_paid<DB>(db: DB)
+where
+    DB: Database<Error> + KeysDatabase<Err = Error>,
+{
+    let quote_id = stored_mint_quote(&db).await.id;
+
+    let mut tx = Database::begin_transaction(&db).await.unwrap();
+    let mut stale = tx.get_mint_quote(&quote_id).await.unwrap().unwrap();
+    tx.commit().await.unwrap();
+
+    let mut tx = Database::begin_transaction(&db).await.unwrap();
+    let mut current = tx.get_mint_quote(&quote_id).await.unwrap().unwrap();
+    current
+        .add_payment(
+            Amount::from(100).with_unit(CurrencyUnit::Sat),
+            unique_string(),
+            None,
+        )
+        .unwrap();
+    tx.update_mint_quote(&mut current).await.unwrap();
+    tx.commit().await.unwrap();
+
+    stale
+        .add_payment(
+            Amount::from(50).with_unit(CurrencyUnit::Sat),
+            unique_string(),
+            None,
+        )
+        .unwrap();
+    let mut tx = Database::begin_transaction(&db).await.unwrap();
+    let err = tx.update_mint_quote(&mut stale).await.unwrap_err();
+    assert!(matches!(err, Error::ConcurrentUpdate), "{err}");
+    tx.rollback().await.unwrap();
+
+    let stored = db.get_mint_quote(&quote_id).await.unwrap().unwrap();
+    assert_eq!(stored.amount_paid().value(), 100);
+    assert_eq!(stored.payments.len(), 1);
+}
+
+/// A mint quote kept past its transaction can't overwrite an issuance recorded since.
+pub async fn update_mint_quote_refuses_stale_amount_issued<DB>(db: DB)
+where
+    DB: Database<Error> + KeysDatabase<Err = Error>,
+{
+    let quote_id = stored_mint_quote(&db).await.id;
+
+    let mut tx = Database::begin_transaction(&db).await.unwrap();
+    let mut quote = tx.get_mint_quote(&quote_id).await.unwrap().unwrap();
+    quote
+        .add_payment(
+            Amount::from(100).with_unit(CurrencyUnit::Sat),
+            unique_string(),
+            None,
+        )
+        .unwrap();
+    tx.update_mint_quote(&mut quote).await.unwrap();
+    tx.commit().await.unwrap();
+
+    let mut tx = Database::begin_transaction(&db).await.unwrap();
+    let mut stale = tx.get_mint_quote(&quote_id).await.unwrap().unwrap();
+    tx.commit().await.unwrap();
+
+    let mut tx = Database::begin_transaction(&db).await.unwrap();
+    let mut current = tx.get_mint_quote(&quote_id).await.unwrap().unwrap();
+    current
+        .add_issuance(Amount::from(40).with_unit(CurrencyUnit::Sat))
+        .unwrap();
+    tx.update_mint_quote(&mut current).await.unwrap();
+    tx.commit().await.unwrap();
+
+    stale
+        .add_issuance(Amount::from(10).with_unit(CurrencyUnit::Sat))
+        .unwrap();
+    let mut tx = Database::begin_transaction(&db).await.unwrap();
+    let err = tx.update_mint_quote(&mut stale).await.unwrap_err();
+    assert!(matches!(err, Error::ConcurrentUpdate), "{err}");
+    tx.rollback().await.unwrap();
+
+    let stored = db.get_mint_quote(&quote_id).await.unwrap().unwrap();
+    assert_eq!(stored.amount_issued().value(), 40);
+    assert_eq!(stored.issuance.len(), 1);
+}
+
+/// A melt quote kept past its transaction can't move the stored state backwards.
+pub async fn update_melt_quote_state_refuses_stale_state<DB>(db: DB)
+where
+    DB: Database<Error> + KeysDatabase<Err = Error>,
+{
+    use cashu::MeltQuoteState;
+
+    let quote_id = stored_melt_quote(&db).await.id;
+
+    let mut tx = Database::begin_transaction(&db).await.unwrap();
+    let mut stale = tx.get_melt_quote(&quote_id).await.unwrap().unwrap();
+    tx.commit().await.unwrap();
+
+    let mut tx = Database::begin_transaction(&db).await.unwrap();
+    let mut current = tx.get_melt_quote(&quote_id).await.unwrap().unwrap();
+    tx.update_melt_quote_state(&mut current, MeltQuoteState::Pending, None)
+        .await
+        .unwrap();
+    tx.update_melt_quote_state(&mut current, MeltQuoteState::Paid, None)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let mut tx = Database::begin_transaction(&db).await.unwrap();
+    let err = tx
+        .update_melt_quote_state(&mut stale, MeltQuoteState::Pending, None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::ConcurrentUpdate), "{err}");
+    tx.rollback().await.unwrap();
+
+    let stored = db.get_melt_quote(&quote_id).await.unwrap().unwrap();
+    assert_eq!(stored.state, MeltQuoteState::Paid);
+}
+
+/// A melt quote kept past its transaction can't change the lookup id of a quote that moved on.
+pub async fn update_melt_quote_request_lookup_id_refuses_stale_state<DB>(db: DB)
+where
+    DB: Database<Error> + KeysDatabase<Err = Error>,
+{
+    use cashu::MeltQuoteState;
+
+    let melt_quote = stored_melt_quote(&db).await;
+    let quote_id = melt_quote.id;
+
+    let mut tx = Database::begin_transaction(&db).await.unwrap();
+    let mut stale = tx.get_melt_quote(&quote_id).await.unwrap().unwrap();
+    tx.commit().await.unwrap();
+
+    let mut tx = Database::begin_transaction(&db).await.unwrap();
+    let mut current = tx.get_melt_quote(&quote_id).await.unwrap().unwrap();
+    tx.update_melt_quote_state(&mut current, MeltQuoteState::Pending, None)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let mut tx = Database::begin_transaction(&db).await.unwrap();
+    let err = tx
+        .update_melt_quote_request_lookup_id(
+            &mut stale,
+            &PaymentIdentifier::CustomId(unique_string()),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::ConcurrentUpdate), "{err}");
+    tx.rollback().await.unwrap();
+
+    let stored = db.get_melt_quote(&quote_id).await.unwrap().unwrap();
+    assert_eq!(stored.request_lookup_id, melt_quote.request_lookup_id);
+}
+
+/// A stale write that reaches a locked row waits for the lock, then sees the committed totals.
+///
+/// This holds a row lock while another transaction writes, so it needs a database that allows
+/// concurrent writers.
+pub async fn stale_mint_quote_write_waits_for_lock_then_is_refused(db: DynMintDatabase) {
+    let mint_quote = MintQuote::new(
+        None,
+        unique_string(),
+        cashu::CurrencyUnit::Sat,
+        None,
+        0,
+        PaymentIdentifier::CustomId(unique_string()),
+        None,
+        Amount::new(0, cashu::CurrencyUnit::Sat),
+        Amount::new(0, cashu::CurrencyUnit::Sat),
+        cashu::PaymentMethod::Known(KnownMethod::Bolt12),
+        0,
+        0,
+        vec![],
+        vec![],
+        None,
+    );
+    let quote_id = mint_quote.id.clone();
+
+    let mut tx = db.begin_transaction().await.unwrap();
+    tx.add_mint_quote(mint_quote).await.unwrap();
+    tx.commit().await.unwrap();
+
+    let mut tx = db.begin_transaction().await.unwrap();
+    let mut stale = tx.get_mint_quote(&quote_id).await.unwrap().unwrap();
+    tx.commit().await.unwrap();
+
+    let mut holder = db.begin_transaction().await.unwrap();
+    let mut current = holder.get_mint_quote(&quote_id).await.unwrap().unwrap();
+    current
+        .add_payment(
+            Amount::from(100).with_unit(CurrencyUnit::Sat),
+            unique_string(),
+            None,
+        )
+        .unwrap();
+    holder.update_mint_quote(&mut current).await.unwrap();
+
+    let writer = tokio::spawn({
+        let db = db.clone();
+        async move {
+            stale
+                .add_payment(
+                    Amount::from(50).with_unit(CurrencyUnit::Sat),
+                    unique_string(),
+                    None,
+                )
+                .unwrap();
+            let mut tx = db.begin_transaction().await.unwrap();
+            let result = tx.update_mint_quote(&mut stale).await;
+            tx.rollback().await.unwrap();
+            result
+        }
+    });
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !writer.is_finished(),
+        "stale write did not wait for the transaction holding the row lock"
+    );
+
+    holder.commit().await.unwrap();
+
+    let result = tokio::time::timeout(Duration::from_secs(5), writer)
+        .await
+        .expect("stale write remained blocked")
+        .expect("writer task");
+    assert!(matches!(result, Err(Error::ConcurrentUpdate)));
+
+    let stored = db.get_mint_quote(&quote_id).await.unwrap().unwrap();
+    assert_eq!(stored.amount_paid().value(), 100);
+    assert_eq!(stored.payments.len(), 1);
+}
+
 /// Test concurrent quote batches acquire row locks in a consistent order.
 ///
 /// This test is invoked explicitly by the PostgreSQL suite because SQLite does
