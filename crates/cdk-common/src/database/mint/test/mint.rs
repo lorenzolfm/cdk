@@ -857,6 +857,60 @@ where
     tx.commit().await.unwrap();
 }
 
+/// A melt quote kept past its transaction can't move the stored state backwards.
+pub async fn update_melt_quote_state_refuses_stale_state<DB>(db: DB)
+where
+    DB: Database<Error> + KeysDatabase<Err = Error>,
+{
+    use cashu::MeltQuoteState;
+
+    let melt_quote = MeltQuote::new(
+        None,
+        MeltPaymentRequest::Bolt11 {
+            bolt11: "lnbc330n1p5d85skpp5344v3ktclujsjl3h09wgsfm7zytumr7h7zhrl857f5w8nv0a52zqdqqcqzzsxqyz5vqrzjqvueefmrckfdwyyu39m0lf24sqzcr9vcrmxrvgfn6empxz7phrjxvrttncqq0lcqqyqqqqlgqqqqqqgq2qsp5j3rrg8kvpemqxtf86j8tjm90wq77c7ende4e5qmrerq4xsg02vhq9qxpqysgqjltywgyk6uc5qcgwh8xnzmawl2tjlhz8d28tgp3yx8xwtz76x0jqkfh6mmq70hervjxs0keun7ur0spldgll29l0dnz3md50d65sfqqqwrwpsu".parse().unwrap()
+        },
+        cashu::CurrencyUnit::Sat,
+        Amount::new(100, cashu::CurrencyUnit::Sat),
+        Amount::new(10, cashu::CurrencyUnit::Sat),
+        0,
+        Some(PaymentIdentifier::CustomId(unique_string())),
+        None,
+        cashu::PaymentMethod::Known(KnownMethod::Bolt11),
+        None,
+        None,
+    );
+    let quote_id = melt_quote.id.clone();
+
+    let mut tx = Database::begin_transaction(&db).await.unwrap();
+    tx.add_melt_quote(melt_quote).await.unwrap();
+    tx.commit().await.unwrap();
+
+    let mut tx = Database::begin_transaction(&db).await.unwrap();
+    let mut stale = tx.get_melt_quote(&quote_id).await.unwrap().unwrap();
+    tx.commit().await.unwrap();
+
+    let mut tx = Database::begin_transaction(&db).await.unwrap();
+    let mut current = tx.get_melt_quote(&quote_id).await.unwrap().unwrap();
+    tx.update_melt_quote_state(&mut current, MeltQuoteState::Pending, None)
+        .await
+        .unwrap();
+    tx.update_melt_quote_state(&mut current, MeltQuoteState::Paid, None)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let mut tx = Database::begin_transaction(&db).await.unwrap();
+    let err = tx
+        .update_melt_quote_state(&mut stale, MeltQuoteState::Pending, None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::ConcurrentUpdate), "{err}");
+    tx.rollback().await.unwrap();
+
+    let stored = db.get_melt_quote(&quote_id).await.unwrap().unwrap();
+    assert_eq!(stored.state, MeltQuoteState::Paid);
+}
+
 /// Test updating melt quote request lookup id
 pub async fn update_melt_quote_request_lookup_id<DB>(db: DB)
 where
