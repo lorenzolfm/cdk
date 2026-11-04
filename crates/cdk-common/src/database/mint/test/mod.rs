@@ -372,6 +372,7 @@ macro_rules! mint_db_test {
             add_melt_quote_only_once,
             update_melt_quote_state_transition,
             update_melt_quote_request_lookup_id,
+            update_melt_quote_request_lookup_id_refuses_stale_state,
             get_all_mint_quotes,
             get_all_melt_quotes,
             get_mint_quote_by_request,
