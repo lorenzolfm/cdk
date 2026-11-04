@@ -126,6 +126,7 @@ where
     /// On success, returns the proofs wrapped in [`Acquired<ProofsWithState>`] with
     /// state set to `Unspent`, indicating the rows are locked for the duration of
     /// the transaction.
+    #[allow(clippy::disallowed_methods)]
     async fn add_proofs(
         &mut self,
         proofs: Proofs,
@@ -184,7 +185,10 @@ where
             .await?;
         }
 
-        Ok(ProofsWithState::new(proofs, State::Unspent).into())
+        Ok(Acquired::from_locked(ProofsWithState::new(
+            proofs,
+            State::Unspent,
+        )))
     }
 
     /// Updates all proofs to the given state in the database.
@@ -364,6 +368,7 @@ where
         .collect::<Result<Vec<_>, _>>()?)
     }
 
+    #[allow(clippy::disallowed_methods)]
     async fn get_proofs(
         &mut self,
         ys: &[PublicKey],
@@ -416,7 +421,7 @@ where
         }
 
         let state = first_state.unwrap_or(State::Unspent);
-        Ok(ProofsWithState::new(proofs, state).into())
+        Ok(Acquired::from_locked(ProofsWithState::new(proofs, state)))
     }
 }
 
