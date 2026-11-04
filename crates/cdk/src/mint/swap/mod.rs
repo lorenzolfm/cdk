@@ -1,3 +1,4 @@
+use cdk_common::database::MintStore;
 use cdk_common::SpendingConditionVerification;
 use swap_saga::SwapSaga;
 use tracing::instrument;
@@ -10,7 +11,10 @@ pub mod swap_saga;
 #[cfg(test)]
 mod tests;
 
-impl Mint {
+impl<D> Mint<D>
+where
+    D: MintStore,
+{
     /// Process Swap
     #[instrument(skip_all)]
     pub async fn process_swap_request(

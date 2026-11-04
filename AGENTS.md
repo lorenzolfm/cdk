@@ -197,7 +197,7 @@ impl fmt::Display for MyType { ... }
 
 - Runtime: `tokio`. Tests use `#[tokio::test]`.
 - Trait definitions use `#[async_trait]` (with `#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]` for WASM-compatible traits).
-- Dynamic dispatch via `Arc<dyn Trait + Send + Sync>` with `Dyn*` type aliases (e.g., `DynMintDatabase`).
+- Dynamic dispatch via `Arc<dyn Trait + Send + Sync>` with `Dyn*` type aliases (e.g., `DynMintAuthDatabase`).
 
 ## Naming Conventions
 
@@ -205,7 +205,7 @@ impl fmt::Display for MyType { ... }
 - Functions: `snake_case`, verb-leading (`process_swap_request`, `verify_inputs`)
 - Builder methods: `with_*` prefix (`with_name()`, `with_auth()`)
 - Constants: `SCREAMING_SNAKE_CASE`
-- Type aliases for dynamic dispatch: `Dyn*` prefix (`DynMintDatabase`)
+- Type aliases for dynamic dispatch: `Dyn*` prefix (`DynMintAuthDatabase`)
 
 ## Project Structure
 

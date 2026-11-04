@@ -12,7 +12,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use cdk_common::database::{self, DbTransactionFinalizer, Error, MintDatabase};
+use cdk_common::database::{self, DbTransactionFinalizer, Error, LockingTransaction, MintDatabase};
 use cdk_common::QuoteId;
 
 use crate::common::migrate;
@@ -20,6 +20,7 @@ use crate::database::{ConnectionWithTransaction, DatabaseExecutor};
 use crate::pool::{DatabasePool, Pool, PooledResource};
 use crate::stmt::query;
 
+mod acquired;
 mod auth;
 mod completed_operations;
 mod keys;
@@ -34,6 +35,7 @@ mod migrations {
     include!(concat!(env!("OUT_DIR"), "/migrations_mint.rs"));
 }
 
+pub use acquired::Acquired;
 pub use auth::SQLMintAuthDatabase;
 #[cfg(feature = "prometheus")]
 use cdk_prometheus::MintMetricGuard;
@@ -86,7 +88,7 @@ where
 
     async fn begin_transaction_from_pool(
         pool: &Arc<Pool<RM>>,
-    ) -> Result<Box<dyn database::MintTransaction<Error> + Send + Sync>, Error> {
+    ) -> Result<Box<SQLTransaction<RM>>, Error> {
         let tx = SQLTransaction {
             inner: ConnectionWithTransaction::new(
                 pool.get().await.map_err(|e| Error::Database(Box::new(e)))?,
@@ -130,6 +132,16 @@ where
 
         Ok(true)
     }
+}
+
+impl<RM> LockingTransaction for SQLTransaction<RM>
+where
+    RM: DatabasePool + 'static,
+{
+    type Locked<T>
+        = Acquired<T>
+    where
+        T: Send;
 }
 
 #[async_trait]
@@ -182,9 +194,9 @@ impl<RM> MintDatabase<Error> for SQLMintDatabase<RM>
 where
     RM: DatabasePool + 'static,
 {
-    async fn begin_transaction(
-        &self,
-    ) -> Result<Box<dyn database::MintTransaction<Error> + Send + Sync>, Error> {
+    type Transaction = SQLTransaction<RM>;
+
+    async fn begin_transaction(&self) -> Result<Box<SQLTransaction<RM>>, Error> {
         Self::begin_transaction_from_pool(&self.pool).await
     }
 }

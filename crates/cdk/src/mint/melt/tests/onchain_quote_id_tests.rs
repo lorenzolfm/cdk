@@ -4,6 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use cdk_common::database::mint::prelude::*;
 use cdk_common::melt::MeltQuoteRequest;
 use cdk_common::nut00::KnownMethod;
 use cdk_common::nuts::nut30::MeltQuoteOnchainFeeOption;
@@ -17,7 +18,8 @@ use cdk_common::quote_id::QuoteId;
 use cdk_common::{Amount, MeltQuoteOnchainRequest, PaymentMethod};
 use futures::Stream;
 
-use crate::mint::{Mint, MintBuilder, MintMeltLimits};
+use crate::mint::{MintBuilder, MintMeltLimits};
+use crate::test_helpers::mint::TestMint as Mint;
 use crate::types::QuoteTTL;
 use crate::Error;
 

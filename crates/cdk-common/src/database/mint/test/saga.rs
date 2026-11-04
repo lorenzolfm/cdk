@@ -1,5 +1,6 @@
 //! Saga database tests
 
+use crate::database::mint::prelude::*;
 use crate::database::mint::{Database, Error};
 use crate::mint::{
     MeltFinalizationData, MeltSagaState, OperationKind, Saga, SagaStateEnum, SwapSagaState,

@@ -1,3 +1,4 @@
+use cdk_common::database::MintStore;
 use cdk_signatory::signatory::RotateKeyArguments;
 use tracing::instrument;
 
@@ -8,7 +9,10 @@ use crate::Error;
 
 mod auth;
 
-impl Mint {
+impl<D> Mint<D>
+where
+    D: MintStore,
+{
     /// Retrieve the public keys of the active keyset for distribution to wallet
     /// clients
     #[instrument(skip(self))]

@@ -6,12 +6,16 @@ use cdk::nuts::nut04::MintMethodSettings;
 use cdk::nuts::nut05::MeltMethodSettings;
 use cdk::nuts::{CurrencyUnit, PaymentMethod};
 use cdk::Amount;
+use cdk_common::database::MintStore;
 use tonic::{Request, Response, Status};
 
 use super::MintRPCServer;
 use crate::payment_method::payment_method_service_server::PaymentMethodService;
 
-impl MintRPCServer {
+impl<D> MintRPCServer<D>
+where
+    D: MintStore,
+{
     /// Updates the settings of one mint (NUT-04) payment method, keeping the
     /// current value of any setting that is not given
     ///
@@ -185,7 +189,10 @@ impl MintRPCServer {
 }
 
 #[tonic::async_trait]
-impl PaymentMethodService for MintRPCServer {
+impl<D> PaymentMethodService for MintRPCServer<D>
+where
+    D: MintStore,
+{
     /// Updates the settings of one mint (NUT-04) payment method
     async fn update_mint_method(
         &self,

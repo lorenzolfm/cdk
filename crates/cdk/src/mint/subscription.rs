@@ -5,7 +5,7 @@ use std::ops::Deref;
 use std::sync::{Arc, Weak};
 
 use cdk_common::common::PaymentProcessorKey;
-use cdk_common::database::DynMintDatabase;
+use cdk_common::database::MintStore;
 use cdk_common::mint::{MeltQuote, MintQuote};
 use cdk_common::nut17::NotificationId;
 use cdk_common::payment::DynMintPayment;
@@ -22,16 +22,34 @@ use super::Mint;
 use crate::event::MintEvent;
 
 /// Mint subtopics
-#[derive(Clone)]
 #[allow(missing_debug_implementations)]
-pub struct MintPubSubSpec {
-    db: DynMintDatabase,
+pub struct MintPubSubSpec<D>
+where
+    D: MintStore,
+{
+    db: Arc<D>,
     payment_processors: Arc<HashMap<PaymentProcessorKey, DynMintPayment>>,
     // The manager owns this spec; a strong reference back would retain both forever.
-    pubsub_manager: Weak<PubSubManager>,
+    pubsub_manager: Weak<PubSubManager<D>>,
 }
 
-impl MintPubSubSpec {
+impl<D> Clone for MintPubSubSpec<D>
+where
+    D: MintStore,
+{
+    fn clone(&self) -> Self {
+        Self {
+            db: self.db.clone(),
+            payment_processors: self.payment_processors.clone(),
+            pubsub_manager: self.pubsub_manager.clone(),
+        }
+    }
+}
+
+impl<D> MintPubSubSpec<D>
+where
+    D: MintStore,
+{
     /// Call Mint::check_mint_quote_payments to update quotes by pinging the payment backend
     async fn get_mint_quotes(
         &self,
@@ -214,17 +232,17 @@ impl MintPubSubSpec {
 }
 
 #[async_trait::async_trait]
-impl Spec for MintPubSubSpec {
+impl<D> Spec for MintPubSubSpec<D>
+where
+    D: MintStore,
+{
     type SubscriptionId = SubId;
 
     type Topic = NotificationId<QuoteId>;
 
     type Event = MintEvent<QuoteId>;
 
-    type Context = (
-        DynMintDatabase,
-        Arc<HashMap<PaymentProcessorKey, DynMintPayment>>,
-    );
+    type Context = (Arc<D>, Arc<HashMap<PaymentProcessorKey, DynMintPayment>>);
 
     fn new_instance(context: Self::Context) -> Arc<Self> {
         Arc::new(Self {
@@ -248,16 +266,16 @@ impl Spec for MintPubSubSpec {
 
 /// PubsubManager
 #[allow(missing_debug_implementations)]
-pub struct PubSubManager(Pubsub<MintPubSubSpec>);
+pub struct PubSubManager<D>(Pubsub<MintPubSubSpec<D>>)
+where
+    D: MintStore;
 
-impl PubSubManager {
+impl<D> PubSubManager<D>
+where
+    D: MintStore,
+{
     /// Create a new instance
-    pub fn new(
-        context: (
-            DynMintDatabase,
-            Arc<HashMap<PaymentProcessorKey, DynMintPayment>>,
-        ),
-    ) -> Arc<Self> {
+    pub fn new(context: (Arc<D>, Arc<HashMap<PaymentProcessorKey, DynMintPayment>>)) -> Arc<Self> {
         Arc::new_cyclic(|manager| {
             Self(Pubsub::new(Arc::new(MintPubSubSpec {
                 db: context.0,
@@ -406,8 +424,11 @@ impl PubSubManager {
     }
 }
 
-impl Deref for PubSubManager {
-    type Target = Pubsub<MintPubSubSpec>;
+impl<D> Deref for PubSubManager<D>
+where
+    D: MintStore,
+{
+    type Target = Pubsub<MintPubSubSpec<D>>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -420,7 +441,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
-    use cdk_common::database::DynMintDatabase;
+    use cdk_common::database::mint::prelude::*;
     use cdk_common::mint::MintQuote;
     use cdk_common::payment::{
         self, CreateIncomingPaymentResponse, Event, IncomingPaymentOptions, MakePaymentResponse,
@@ -434,6 +455,7 @@ mod tests {
     use tokio::time::timeout;
 
     use super::*;
+    use crate::test_helpers::mint::TestDb;
 
     fn bolt11_quote(id: QuoteId, amount: u64) -> MintQuote {
         MintQuote::new(
@@ -455,7 +477,7 @@ mod tests {
         )
     }
 
-    async fn add_mint_quote(db: &DynMintDatabase, quote: MintQuote) {
+    async fn add_mint_quote(db: &Arc<TestDb>, quote: MintQuote) {
         let payment_amount = quote.amount.clone().expect("quote amount");
         let payment_id = format!("payment-{}", quote.id);
         let mut tx = db.begin_transaction().await.expect("begin transaction");
@@ -471,7 +493,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_events_from_db_batches_multiple_mint_quote_filters() {
-        let db: DynMintDatabase = Arc::new(
+        let db: Arc<TestDb> = Arc::new(
             cdk_sqlite::mint::memory::empty()
                 .await
                 .expect("in-memory mint database"),
@@ -549,7 +571,7 @@ mod tests {
     }
 
     async fn add_melt_quote(
-        db: &DynMintDatabase,
+        db: &Arc<TestDb>,
         quote: MeltQuote,
         with_change: bool,
     ) -> Option<Vec<BlindSignature>> {
@@ -585,8 +607,7 @@ mod tests {
         use cdk_common::nut00::KnownMethod;
         use cdk_common::PaymentMethod;
 
-        let db: DynMintDatabase =
-            Arc::new(cdk_sqlite::mint::memory::empty().await.expect("database"));
+        let db: Arc<TestDb> = Arc::new(cdk_sqlite::mint::memory::empty().await.expect("database"));
         let spec = MintPubSubSpec::new_instance((db.clone(), Arc::new(HashMap::new())));
         for method in [
             PaymentMethod::Known(KnownMethod::Bolt11),
@@ -632,8 +653,7 @@ mod tests {
     async fn get_events_from_db_returns_persisted_melt_change() {
         use cdk_common::nut00::KnownMethod;
 
-        let db: DynMintDatabase =
-            Arc::new(cdk_sqlite::mint::memory::empty().await.expect("database"));
+        let db: Arc<TestDb> = Arc::new(cdk_sqlite::mint::memory::empty().await.expect("database"));
         let spec = MintPubSubSpec::new_instance((db.clone(), Arc::new(HashMap::new())));
         for method in [
             KnownMethod::Bolt11,
@@ -682,8 +702,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_events_from_db_backfills_custom_mint_quotes() {
-        let db: DynMintDatabase =
-            Arc::new(cdk_sqlite::mint::memory::empty().await.expect("database"));
+        let db: Arc<TestDb> = Arc::new(cdk_sqlite::mint::memory::empty().await.expect("database"));
         let method = "test_method".to_owned();
         let mut quote = bolt11_quote(QuoteId::new(), 21);
         quote.payment_method = cdk_common::PaymentMethod::Custom(method.clone());
@@ -719,8 +738,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_events_from_db_backfills_custom_melt_quotes() {
-        let db: DynMintDatabase =
-            Arc::new(cdk_sqlite::mint::memory::empty().await.expect("database"));
+        let db: Arc<TestDb> = Arc::new(cdk_sqlite::mint::memory::empty().await.expect("database"));
         let method = "test_method".to_owned();
         let mut quote = melt_quote(
             cdk_common::PaymentMethod::Custom(method.clone()),
@@ -841,7 +859,7 @@ mod tests {
             ),
         ] {
             timeout(Duration::from_secs(5), async {
-                let db: DynMintDatabase =
+                let db: Arc<TestDb> =
                     Arc::new(cdk_sqlite::mint::memory::empty().await.expect("database"));
                 let mut quote = bolt11_quote(QuoteId::new(), 21);
                 quote.payment_method = method.clone();
@@ -917,8 +935,7 @@ mod tests {
 
     #[tokio::test]
     async fn pubsub_manager_does_not_retain_its_database() {
-        let db: DynMintDatabase =
-            Arc::new(cdk_sqlite::mint::memory::empty().await.expect("database"));
+        let db: Arc<TestDb> = Arc::new(cdk_sqlite::mint::memory::empty().await.expect("database"));
         let db_weak = Arc::downgrade(&db);
         let manager = PubSubManager::new((db, Arc::new(HashMap::new())));
         let manager_weak = Arc::downgrade(&manager);

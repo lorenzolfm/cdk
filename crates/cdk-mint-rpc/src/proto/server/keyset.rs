@@ -4,12 +4,16 @@ use std::str::FromStr;
 
 use cdk::mint::MintKeySetInfo;
 use cdk::nuts::CurrencyUnit;
+use cdk_common::database::MintStore;
 use tonic::{Request, Response, Status};
 
 use super::MintRPCServer;
 use crate::keyset::keyset_service_server::KeysetService;
 
-impl MintRPCServer {
+impl<D> MintRPCServer<D>
+where
+    D: MintStore,
+{
     /// Rotates to the next keyset for the given unit
     async fn rotate_keyset(
         &self,
@@ -34,7 +38,10 @@ impl MintRPCServer {
 }
 
 #[tonic::async_trait]
-impl KeysetService for MintRPCServer {
+impl<D> KeysetService for MintRPCServer<D>
+where
+    D: MintStore,
+{
     /// Rotates to the next keyset for the specified currency unit
     async fn rotate_next_keyset(
         &self,

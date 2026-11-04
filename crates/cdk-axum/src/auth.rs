@@ -9,6 +9,7 @@ use axum::{Json, Router};
 use cdk::nuts::{
     AuthToken, BlindAuthToken, KeysResponse, KeysetResponse, MintAuthRequest, MintResponse,
 };
+use cdk_common::database::MintStore;
 use serde::{Deserialize, Serialize};
 
 use crate::{get_keyset_pubkeys, into_response, MintState};
@@ -87,18 +88,24 @@ where
 /// Get all active keyset IDs of the mint
 ///
 /// This endpoint returns a list of keysets that the mint currently supports and will accept tokens from.
-pub async fn get_auth_keysets(
-    State(state): State<MintState>,
-) -> Result<Json<KeysetResponse>, Response> {
+pub async fn get_auth_keysets<D>(
+    State(state): State<MintState<D>>,
+) -> Result<Json<KeysetResponse>, Response>
+where
+    D: MintStore,
+{
     Ok(Json(state.mint.auth_keysets()))
 }
 
 /// Get the public keys of the newest blind auth mint keyset
 ///
 /// This endpoint returns a dictionary of all supported token values of the mint and their associated public key.
-pub async fn get_blind_auth_keys(
-    State(state): State<MintState>,
-) -> Result<Json<KeysResponse>, Response> {
+pub async fn get_blind_auth_keys<D>(
+    State(state): State<MintState<D>>,
+) -> Result<Json<KeysResponse>, Response>
+where
+    D: MintStore,
+{
     let pubkeys = state.mint.auth_pubkeys().map_err(|err| {
         tracing::error!("Could not get keys: {}", err);
         into_response(err)
@@ -112,11 +119,14 @@ pub async fn get_blind_auth_keys(
 /// Requests the minting of tokens belonging to a paid payment request.
 ///
 /// Call this endpoint after `POST /v1/mint/quote`.
-pub async fn post_mint_auth(
+pub async fn post_mint_auth<D>(
     auth: AuthHeader,
-    State(state): State<MintState>,
+    State(state): State<MintState<D>>,
     Json(payload): Json<MintAuthRequest>,
-) -> Result<Json<MintResponse>, Response> {
+) -> Result<Json<MintResponse>, Response>
+where
+    D: MintStore,
+{
     let auth_token = match auth {
         AuthHeader::Clear(cat) => {
             if cat.is_empty() {
@@ -144,7 +154,10 @@ pub async fn post_mint_auth(
     Ok(Json(res))
 }
 
-pub fn create_auth_router(state: MintState) -> Router<MintState> {
+pub fn create_auth_router<D>(state: MintState<D>) -> Router<MintState<D>>
+where
+    D: MintStore,
+{
     Router::new()
         .nest(
             "/auth/blind",

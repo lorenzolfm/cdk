@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use cdk_common::database::MintStore;
 use cdk_common::nuts::nut17::MAX_CUSTOM_KIND_LEN;
 use cdk_common::{
     Amount, BlindedMessage, CurrencyUnit, Id, PaymentMethod, Proofs, ProofsMethods, PublicKey,
@@ -39,7 +40,10 @@ pub struct Verification {
     pub amount: Amount<CurrencyUnit>,
 }
 
-impl Mint {
+impl<D> Mint<D>
+where
+    D: MintStore,
+{
     /// Verify that the inputs to the transaction are unique
     #[instrument(skip_all)]
     pub fn check_inputs_unique(inputs: &Proofs) -> Result<(), Error> {
@@ -201,7 +205,7 @@ impl Mint {
             });
         }
 
-        Mint::check_outputs_unique(outputs)?;
+        Self::check_outputs_unique(outputs)?;
 
         let unit = self.verify_outputs_keyset(outputs)?;
 
@@ -262,7 +266,7 @@ impl Mint {
             }
         }
 
-        Mint::check_inputs_unique(inputs)?;
+        Self::check_inputs_unique(inputs)?;
         let unit = self.verify_inputs_keyset(inputs).await?;
 
         if unit == CurrencyUnit::Auth {

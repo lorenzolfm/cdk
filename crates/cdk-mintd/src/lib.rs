@@ -14,7 +14,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use axum::extract::DefaultBodyLimit;
 use axum::Router;
 use bip39::Mnemonic;
-use cdk::cdk_database::{self, KVStore, KVStoreCompareAndSwap, MintDatabase, MintKeysDatabase};
+use cdk::cdk_database::{self, KVStore, KVStoreCompareAndSwap, MintKeysDatabase};
 use cdk::mint::{Mint, MintBuilder, MintMeltLimits};
 use cdk::nuts::nut00::KnownMethod;
 #[cfg(any(
@@ -32,7 +32,8 @@ use cdk::nuts::{
 };
 use cdk_axum::cache::HttpCache;
 use cdk_common::common::QuoteTTL;
-use cdk_common::database::DynMintDatabase;
+use cdk_common::database::mint::prelude::*;
+use cdk_common::database::MintStore;
 // internal crate modules
 #[cfg(feature = "prometheus")]
 use cdk_common::payment::MetricsMintPayment;
@@ -371,16 +372,16 @@ async fn initial_setup(
     settings: &config::Settings,
     db_password: Option<String>,
 ) -> Result<(
-    DynMintDatabase,
+    SelectedMintStore,
     Arc<dyn MintKeysDatabase<Err = cdk_database::Error> + Send + Sync>,
     Arc<dyn KVStore<Err = cdk_database::Error> + Send + Sync>,
     Arc<dyn KVStoreCompareAndSwap<Err = cdk_database::Error> + Send + Sync>,
 )> {
     tracing::info!("Initializing database...");
-    let (localstore, keystore, kv, configuration_store) =
+    let (mint_store, keystore, kv, configuration_store) =
         setup_database(settings, work_dir, db_password).await?;
     tracing::info!("Database initialized successfully");
-    Ok((localstore, keystore, kv, configuration_store))
+    Ok((mint_store, keystore, kv, configuration_store))
 }
 
 /// Operator intent for the mint database targeted by `config init`.
@@ -932,12 +933,35 @@ pub fn apply_seed_file(settings: &mut config::Settings, seed_file: &Path) -> Res
     Ok(())
 }
 
+/// The mint store of the database engine selected at runtime.
+///
+/// [`Mint`] is generic over its store, so the store keeps its concrete type until
+/// `with_mint_store!` passes it to generic code.
+enum SelectedMintStore {
+    #[cfg(feature = "sqlite")]
+    Sqlite(Arc<MintSqliteDatabase>),
+    #[cfg(feature = "postgres")]
+    Postgres(Arc<MintPgDatabase>),
+}
+
+/// Evaluates `$body` with `$store` bound to the concrete store of a [`SelectedMintStore`].
+macro_rules! with_mint_store {
+    ($selected:expr, |$store:ident| $body:expr) => {
+        match $selected {
+            #[cfg(feature = "sqlite")]
+            SelectedMintStore::Sqlite($store) => $body,
+            #[cfg(feature = "postgres")]
+            SelectedMintStore::Postgres($store) => $body,
+        }
+    };
+}
+
 async fn setup_database(
     settings: &config::Settings,
     _work_dir: &Path,
     _db_password: Option<String>,
 ) -> Result<(
-    DynMintDatabase,
+    SelectedMintStore,
     Arc<dyn MintKeysDatabase<Err = cdk_database::Error> + Send + Sync>,
     Arc<dyn KVStore<Err = cdk_database::Error> + Send + Sync>,
     Arc<dyn KVStoreCompareAndSwap<Err = cdk_database::Error> + Send + Sync>,
@@ -947,13 +971,18 @@ async fn setup_database(
         #[cfg(feature = "sqlite")]
         DatabaseEngine::Sqlite => {
             let db = setup_sqlite_database(_work_dir, _db_password).await?;
-            let localstore: Arc<dyn MintDatabase<cdk_database::Error> + Send + Sync> = db.clone();
             let kv: Arc<dyn KVStore<Err = cdk_database::Error> + Send + Sync> = db.clone();
             let configuration_store: Arc<
                 dyn KVStoreCompareAndSwap<Err = cdk_database::Error> + Send + Sync,
             > = db.clone();
-            let keystore: Arc<dyn MintKeysDatabase<Err = cdk_database::Error> + Send + Sync> = db;
-            Ok((localstore, keystore, kv, configuration_store))
+            let keystore: Arc<dyn MintKeysDatabase<Err = cdk_database::Error> + Send + Sync> =
+                db.clone();
+            Ok((
+                SelectedMintStore::Sqlite(db),
+                keystore,
+                kv,
+                configuration_store,
+            ))
         }
         #[cfg(feature = "postgres")]
         DatabaseEngine::Postgres => {
@@ -977,9 +1006,6 @@ async fn setup_database(
             let pg_db = Arc::new(MintPgDatabase::new(db_config).await?);
             tracing::info!("PostgreSQL database connection established");
             #[cfg(feature = "postgres")]
-            let localstore: Arc<dyn MintDatabase<cdk_database::Error> + Send + Sync> =
-                pg_db.clone();
-            #[cfg(feature = "postgres")]
             let kv: Arc<dyn KVStore<Err = cdk_database::Error> + Send + Sync> = pg_db.clone();
             #[cfg(feature = "postgres")]
             let configuration_store: Arc<
@@ -988,9 +1014,14 @@ async fn setup_database(
             #[cfg(feature = "postgres")]
             let keystore: Arc<
                 dyn MintKeysDatabase<Err = cdk_database::Error> + Send + Sync,
-            > = pg_db;
+            > = pg_db.clone();
             #[cfg(feature = "postgres")]
-            return Ok((localstore, keystore, kv, configuration_store));
+            return Ok((
+                SelectedMintStore::Postgres(pg_db),
+                keystore,
+                kv,
+                configuration_store,
+            ));
 
             #[cfg(not(feature = "postgres"))]
             bail!("PostgreSQL support not compiled in. Enable the 'postgres' feature to use PostgreSQL database.")
@@ -1033,13 +1064,16 @@ async fn setup_sqlite_database(
  * Configures a `MintBuilder` instance with provided settings and initializes
  * routers for the configured payment backends.
  */
-async fn configure_mint_builder_with_wallet_info(
+async fn configure_mint_builder_with_wallet_info<D>(
     settings: &config::Settings,
-    mint_builder: MintBuilder,
+    mint_builder: MintBuilder<D>,
     runtime: Option<std::sync::Arc<tokio::runtime::Runtime>>,
     work_dir: &Path,
     kv_store: Option<Arc<dyn KVStore<Err = cdk::cdk_database::Error> + Send + Sync>>,
-) -> Result<(MintBuilder, ConfiguredWalletInfoProvider)> {
+) -> Result<(MintBuilder<D>, ConfiguredWalletInfoProvider)>
+where
+    D: MintStore,
+{
     settings
         .validate_backend_pairing()
         .map_err(anyhow::Error::msg)?;
@@ -1119,13 +1153,16 @@ async fn configure_mint_builder_with_wallet_info(
 }
 
 #[cfg(test)]
-async fn configure_mint_builder(
+async fn configure_mint_builder<D>(
     settings: &config::Settings,
-    mint_builder: MintBuilder,
+    mint_builder: MintBuilder<D>,
     runtime: Option<std::sync::Arc<tokio::runtime::Runtime>>,
     work_dir: &Path,
     kv_store: Option<Arc<dyn KVStore<Err = cdk::cdk_database::Error> + Send + Sync>>,
-) -> Result<MintBuilder> {
+) -> Result<MintBuilder<D>>
+where
+    D: MintStore,
+{
     Ok(
         configure_mint_builder_with_wallet_info(
             settings,
@@ -1140,7 +1177,13 @@ async fn configure_mint_builder(
 }
 
 /// Configures basic mint information (name, contact info, descriptions, etc.)
-fn configure_basic_info(settings: &config::Settings, mint_builder: MintBuilder) -> MintBuilder {
+fn configure_basic_info<D>(
+    settings: &config::Settings,
+    mint_builder: MintBuilder<D>,
+) -> MintBuilder<D>
+where
+    D: MintStore,
+{
     // Add contact information
     let mut contacts = Vec::new();
     if let Some(nostr_key) = &settings.mint_info.contact_nostr_public_key {
@@ -1211,13 +1254,16 @@ fn configure_basic_info(settings: &config::Settings, mint_builder: MintBuilder) 
     builder
 }
 /// Configures payment backends based on the specified backend types
-async fn configure_payment_backends(
+async fn configure_payment_backends<D>(
     settings: &config::Settings,
-    mut mint_builder: MintBuilder,
+    mut mint_builder: MintBuilder<D>,
     _runtime: Option<std::sync::Arc<tokio::runtime::Runtime>>,
     work_dir: &Path,
     _kv_store: Option<Arc<dyn KVStore<Err = cdk::cdk_database::Error> + Send + Sync>>,
-) -> Result<MintBuilder> {
+) -> Result<MintBuilder<D>>
+where
+    D: MintStore,
+{
     if settings.payment_backend.is_empty() {
         tracing::info!("No payment backend configured");
         return Ok(mint_builder);
@@ -1401,10 +1447,13 @@ async fn configure_payment_backends(
 }
 
 #[cfg(feature = "fakewallet")]
-fn configure_fake_wallet_keyset_rotations_once(
-    mut mint_builder: MintBuilder,
+fn configure_fake_wallet_keyset_rotations_once<D>(
+    mut mint_builder: MintBuilder<D>,
     fake_wallet: &config::FakeWallet,
-) -> MintBuilder {
+) -> MintBuilder<D>
+where
+    D: MintStore,
+{
     for rotation_cfg in &fake_wallet.keyset_rotations {
         use cdk::mint::KeysetRotation;
 
@@ -1428,13 +1477,16 @@ fn configure_fake_wallet_keyset_rotations_once(
 }
 
 /// Configures Onchain backend based on the specified backend type
-async fn configure_onchain_backend_with_wallet_info(
+async fn configure_onchain_backend_with_wallet_info<D>(
     settings: &config::Settings,
-    #[cfg_attr(not(feature = "bdk"), allow(unused_mut))] mut mint_builder: MintBuilder,
+    #[cfg_attr(not(feature = "bdk"), allow(unused_mut))] mut mint_builder: MintBuilder<D>,
     _runtime: Option<std::sync::Arc<tokio::runtime::Runtime>>,
     _work_dir: &Path,
     _kv_store: Option<Arc<dyn KVStore<Err = cdk::cdk_database::Error> + Send + Sync>>,
-) -> Result<(MintBuilder, ConfiguredWalletInfoProvider)> {
+) -> Result<(MintBuilder<D>, ConfiguredWalletInfoProvider)>
+where
+    D: MintStore,
+{
     use config::OnchainBackend;
     #[cfg(feature = "bdk")]
     use setup::OnchainBackendSetup;
@@ -1546,13 +1598,16 @@ async fn configure_onchain_backend_with_wallet_info(
 }
 
 #[cfg(test)]
-async fn configure_onchain_backend(
+async fn configure_onchain_backend<D>(
     settings: &config::Settings,
-    mint_builder: MintBuilder,
+    mint_builder: MintBuilder<D>,
     runtime: Option<std::sync::Arc<tokio::runtime::Runtime>>,
     work_dir: &Path,
     kv_store: Option<Arc<dyn KVStore<Err = cdk::cdk_database::Error> + Send + Sync>>,
-) -> Result<MintBuilder> {
+) -> Result<MintBuilder<D>>
+where
+    D: MintStore,
+{
     Ok(configure_onchain_backend_with_wallet_info(
         settings,
         mint_builder,
@@ -1565,13 +1620,16 @@ async fn configure_onchain_backend(
 }
 
 /// Helper function to configure a mint builder with a payment backend for a specific currency unit
-async fn configure_backend_for_unit(
+async fn configure_backend_for_unit<D>(
     settings: &config::Settings,
-    mint_builder: MintBuilder,
+    mint_builder: MintBuilder<D>,
     unit: cdk::nuts::CurrencyUnit,
     mint_melt_limits: MintMeltLimits,
     backend: Arc<dyn MintPayment<Err = cdk_common::payment::Error> + Send + Sync>,
-) -> Result<MintBuilder> {
+) -> Result<MintBuilder<D>>
+where
+    D: MintStore,
+{
     let payment_settings = backend.get_settings().await?;
     validate_backend_unit(&unit, &payment_settings.unit)?;
 
@@ -1608,14 +1666,17 @@ async fn configure_backend_for_unit(
     .await
 }
 
-async fn configure_backend_for_methods(
+async fn configure_backend_for_methods<D>(
     settings: &config::Settings,
-    mut mint_builder: MintBuilder,
+    mut mint_builder: MintBuilder<D>,
     unit: cdk::nuts::CurrencyUnit,
     mint_melt_limits: MintMeltLimits,
     backend: Arc<dyn MintPayment<Err = cdk_common::payment::Error> + Send + Sync>,
     methods: Vec<PaymentMethod>,
-) -> Result<MintBuilder> {
+) -> Result<MintBuilder<D>>
+where
+    D: MintStore,
+{
     // Add all supported payment methods to the mint builder
     for method in &methods {
         mint_builder
@@ -1677,11 +1738,14 @@ fn units_are_compatible(
 }
 
 /// Configures cache settings with support for custom payment methods
-async fn configure_cache(
+async fn configure_cache<D>(
     settings: &config::Settings,
-    mint_builder: MintBuilder,
+    mint_builder: MintBuilder<D>,
     payment_methods: &[String],
-) -> Result<MintBuilder> {
+) -> Result<MintBuilder<D>>
+where
+    D: MintStore,
+{
     let mut cached_endpoints = vec![
         // Always include swap endpoint
         CachedEndpoint::new(NUT19Method::Post, NUT19Path::Swap),
@@ -1704,15 +1768,18 @@ async fn configure_cache(
     Ok(mint_builder.with_cache(Some(cache.ttl.as_secs()), cached_endpoints))
 }
 
-async fn setup_authentication(
+async fn setup_authentication<D>(
     settings: &config::Settings,
     _work_dir: &Path,
-    mut mint_builder: MintBuilder,
+    mut mint_builder: MintBuilder<D>,
     _password: Option<String>,
 ) -> Result<(
-    MintBuilder,
+    MintBuilder<D>,
     Option<cdk_common::database::DynMintAuthDatabase>,
-)> {
+)>
+where
+    D: MintStore,
+{
     if let Some(auth_settings) = settings.auth.clone() {
         use cdk_common::database::DynMintAuthDatabase;
 
@@ -1872,12 +1939,15 @@ async fn setup_authentication(
 }
 
 /// Build mints with the configured the signing method (remote signatory or local seed)
-async fn build_mint(
+async fn build_mint<D>(
     settings: &config::Settings,
     keystore: Arc<dyn MintKeysDatabase<Err = cdk_database::Error> + Send + Sync>,
-    mint_builder: MintBuilder,
+    mint_builder: MintBuilder<D>,
     validated_signing_source: Option<&ValidatedSigningSource>,
-) -> Result<Mint> {
+) -> Result<Mint<D>>
+where
+    D: MintStore,
+{
     if let Some(signatory) = settings.enabled_signatory() {
         let tls_dir = signatory.tls_dir.clone();
 
@@ -1958,12 +2028,15 @@ async fn ensure_signatory_identity(
     Ok(())
 }
 
-async fn reconcile_canonical_configuration(
-    mint: &Mint,
+async fn reconcile_canonical_configuration<D>(
+    mint: &Mint<D>,
     mut configured_mint_info: cdk::nuts::MintInfo,
     configured_quote_ttl: QuoteTTL,
     preserve_database_values: bool,
-) -> Result<()> {
+) -> Result<()>
+where
+    D: MintStore,
+{
     if !preserve_database_values {
         tracing::info!(
             "Applying mint info and quote TTL from the database-backed configuration document."
@@ -2001,8 +2074,11 @@ async fn reconcile_canonical_configuration(
 
 /// A mint daemon with every resource built and all database reconciliation
 /// completed, ready to start its services.
-struct PreparedMintd {
-    mint: Arc<cdk::mint::Mint>,
+struct PreparedMintd<D>
+where
+    D: MintStore,
+{
+    mint: Arc<Mint<D>>,
     #[cfg(feature = "prometheus")]
     prometheus: Option<config::Prometheus>,
     mint_service: Router,
@@ -2012,28 +2088,34 @@ struct PreparedMintd {
     shutdown_tx: tokio::sync::broadcast::Sender<()>,
     /// Management RPC server and its TLS directory, when enabled.
     #[cfg(feature = "management-rpc")]
-    rpc_to_start: Option<(cdk_mint_rpc::MintRPCServer, Option<PathBuf>)>,
+    rpc_to_start: Option<(cdk_mint_rpc::MintRPCServer<D>, Option<PathBuf>)>,
 }
 
 /// A mint daemon with all services started and its configuration committed
 /// as applied, serving requests until shutdown.
-struct RunningMintd {
-    mint: Arc<cdk::mint::Mint>,
+struct RunningMintd<D>
+where
+    D: MintStore,
+{
+    mint: Arc<Mint<D>>,
     mint_service: Router,
     listener: tokio::net::TcpListener,
     shutdown_tx: tokio::sync::broadcast::Sender<()>,
     #[cfg(feature = "prometheus")]
     prometheus_handle: Option<tokio::task::JoinHandle<()>>,
     #[cfg(feature = "management-rpc")]
-    rpc_server: Option<cdk_mint_rpc::MintRPCServer>,
+    rpc_server: Option<cdk_mint_rpc::MintRPCServer<D>>,
 }
 
-impl PreparedMintd {
+impl<D> PreparedMintd<D>
+where
+    D: MintStore,
+{
     /// Builds every resource and performs all database reconciliation
     /// without starting tasks or binding listeners.
     #[allow(clippy::too_many_arguments)]
     async fn prepare(
-        mint: Arc<cdk::mint::Mint>,
+        mint: Arc<Mint<D>>,
         settings: &config::Settings,
         _work_dir: &Path,
         _wallet_info_provider: ConfiguredWalletInfoProvider,
@@ -2352,7 +2434,7 @@ impl PreparedMintd {
 
     /// Starts all services, binds the HTTP listener, and commits the
     /// configuration as applied.
-    async fn activate(self) -> Result<RunningMintd> {
+    async fn activate(self) -> Result<RunningMintd<D>> {
         #[cfg(feature = "management-rpc")]
         let rpc_server = {
             if let Some((mut mint_rpc, tls_dir)) = self.rpc_to_start {
@@ -2428,7 +2510,10 @@ impl PreparedMintd {
     }
 }
 
-impl RunningMintd {
+impl<D> RunningMintd<D>
+where
+    D: MintStore,
+{
     /// Serves requests until the shutdown signal fires, then stops all
     /// services gracefully.
     async fn serve(
@@ -2492,8 +2577,8 @@ impl RunningMintd {
 
 /// Starts all mintd services and blocks until the shutdown signal fires.
 #[allow(clippy::too_many_arguments)]
-async fn start_services_with_shutdown(
-    mint: Arc<cdk::mint::Mint>,
+async fn start_services_with_shutdown<D>(
+    mint: Arc<Mint<D>>,
     settings: &config::Settings,
     work_dir: &Path,
     wallet_info_provider: ConfiguredWalletInfoProvider,
@@ -2502,7 +2587,10 @@ async fn start_services_with_shutdown(
     routers: Vec<Router>,
     auth_localstore: Option<cdk_common::database::DynMintAuthDatabase>,
     activation: Option<ConfigurationActivation>,
-) -> Result<()> {
+) -> Result<()>
+where
+    D: MintStore,
+{
     let prepared = PreparedMintd::prepare(
         mint,
         settings,
@@ -2581,30 +2669,32 @@ pub async fn run_mintd_with_shutdown(
     runtime: Option<std::sync::Arc<tokio::runtime::Runtime>>,
     routers: Vec<Router>,
 ) -> Result<()> {
-    let (localstore, keystore, kv, _configuration_store) =
+    let (mint_store, keystore, kv, _configuration_store) =
         initial_setup(work_dir, settings, db_password.clone()).await?;
 
-    run_mintd_with_database_and_shutdown(
-        work_dir,
-        settings,
-        localstore,
-        keystore,
-        kv,
-        shutdown_signal,
-        db_password,
-        runtime,
-        routers,
-        None,
-        None,
-    )
-    .await
+    with_mint_store!(mint_store, |localstore| {
+        run_mintd_with_database_and_shutdown(
+            work_dir,
+            settings,
+            localstore,
+            keystore,
+            kv,
+            shutdown_signal,
+            db_password,
+            runtime,
+            routers,
+            None,
+            None,
+        )
+        .await
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn run_mintd_with_database_and_shutdown(
+async fn run_mintd_with_database_and_shutdown<D>(
     work_dir: &Path,
     settings: &config::Settings,
-    localstore: DynMintDatabase,
+    localstore: Arc<D>,
     keystore: Arc<dyn MintKeysDatabase<Err = cdk_database::Error> + Send + Sync>,
     kv: Arc<dyn KVStore<Err = cdk_database::Error> + Send + Sync>,
     shutdown_signal: impl std::future::Future<Output = ()> + Send + 'static,
@@ -2613,7 +2703,10 @@ async fn run_mintd_with_database_and_shutdown(
     routers: Vec<Router>,
     activation: Option<ConfigurationActivation>,
     validated_signing_source: Option<ValidatedSigningSource>,
-) -> Result<()> {
+) -> Result<()>
+where
+    D: MintStore,
+{
     let mint_builder = MintBuilder::new(localstore);
 
     // If RPC is enabled and DB contains mint_info already, initialize the builder from DB.
@@ -2726,19 +2819,22 @@ pub async fn initialize_configuration(
     db_password: Option<String>,
 ) -> Result<()> {
     let bootstrap = load_database_bootstrap_settings()?;
-    let (localstore, keystore, _kv, configuration_store) =
+    let (mint_store, keystore, _kv, configuration_store) =
         initial_setup(work_dir, &bootstrap, db_password).await?;
-    let mut mint_builder = MintBuilder::new(localstore.clone());
-    mint_builder.init_from_db_if_present().await?;
-    let database_pubkey = mint_builder.current_mint_info().pubkey;
-    let mut keyset_transaction = keystore.begin_transaction().await?;
-    let keysets = keyset_transaction.get_keyset_infos().await?;
-    keyset_transaction.commit().await?;
-    let mut used_keysets = HashSet::new();
-    if mode == MintInitializationMode::Existing {
-        used_keysets.extend(localstore.get_total_issued().await?.into_keys());
-        used_keysets.extend(localstore.get_total_redeemed().await?.into_keys());
-    }
+    let (database_pubkey, keysets, used_keysets) = with_mint_store!(mint_store, |localstore| {
+        let mut mint_builder = MintBuilder::new(localstore.clone());
+        mint_builder.init_from_db_if_present().await?;
+        let database_pubkey = mint_builder.current_mint_info().pubkey;
+        let mut keyset_transaction = keystore.begin_transaction().await?;
+        let keysets = keyset_transaction.get_keyset_infos().await?;
+        keyset_transaction.commit().await?;
+        let mut used_keysets = HashSet::new();
+        if mode == MintInitializationMode::Existing {
+            used_keysets.extend(localstore.get_total_issued().await?.into_keys());
+            used_keysets.extend(localstore.get_total_redeemed().await?.into_keys());
+        }
+        (database_pubkey, keysets, used_keysets)
+    });
 
     configuration_service(configuration_store, &bootstrap)
         .initialize(
@@ -2765,7 +2861,7 @@ pub async fn apply_configuration(
     db_password: Option<String>,
 ) -> Result<ApplyOutcome> {
     let bootstrap = load_database_bootstrap_settings()?;
-    let (_localstore, _keystore, _kv, configuration_store) =
+    let (_mint_store, _keystore, _kv, configuration_store) =
         initial_setup(work_dir, &bootstrap, db_password).await?;
     Ok(configuration_service(configuration_store, &bootstrap)
         .apply(document, validate_only, work_dir, bdk_wallet_policy)
@@ -2778,7 +2874,7 @@ pub async fn rollback_configuration(
     db_password: Option<String>,
 ) -> Result<RollbackOutcome> {
     let bootstrap = load_database_bootstrap_settings()?;
-    let (_localstore, _keystore, _kv, configuration_store) =
+    let (_mint_store, _keystore, _kv, configuration_store) =
         initial_setup(work_dir, &bootstrap, db_password).await?;
     Ok(configuration_service(configuration_store, &bootstrap)
         .rollback()
@@ -2791,7 +2887,7 @@ pub async fn stored_configuration_document(
     db_password: Option<String>,
 ) -> Result<String> {
     let bootstrap = load_database_bootstrap_settings()?;
-    let (_localstore, _keystore, _kv, configuration_store) =
+    let (_mint_store, _keystore, _kv, configuration_store) =
         initial_setup(work_dir, &bootstrap, db_password).await?;
     Ok(configuration_service(configuration_store, &bootstrap)
         .document()
@@ -2807,7 +2903,7 @@ pub async fn run_mintd_from_database(
     routers: Vec<Router>,
 ) -> Result<()> {
     let bootstrap = load_database_bootstrap_settings()?;
-    let (localstore, keystore, kv, configuration_store) =
+    let (mint_store, keystore, kv, configuration_store) =
         initial_setup(work_dir, &bootstrap, db_password.clone()).await?;
     let service = configuration_service(configuration_store, &bootstrap);
     let startup = service.startup().await?;
@@ -2835,20 +2931,22 @@ pub async fn run_mintd_from_database(
         None
     };
 
-    let result = run_mintd_with_database_and_shutdown(
-        work_dir,
-        &settings,
-        localstore,
-        keystore,
-        kv,
-        shutdown_signal(),
-        db_password,
-        runtime,
-        routers,
-        activation,
-        validated_signing_source,
-    )
-    .await;
+    let result = with_mint_store!(mint_store, |localstore| {
+        run_mintd_with_database_and_shutdown(
+            work_dir,
+            &settings,
+            localstore,
+            keystore,
+            kv,
+            shutdown_signal(),
+            db_password,
+            runtime,
+            routers,
+            activation,
+            validated_signing_source,
+        )
+        .await
+    });
 
     if let Some(guard) = guard {
         tracing::info!("Shutting down logging worker thread");
@@ -2867,6 +2965,16 @@ mod tests {
     use cdk::nuts::{CurrencyUnit, MintMethodSettings, PaymentMethod};
 
     use super::*;
+
+    /// The store of a database these tests configured to use the SQLite engine
+    #[cfg(feature = "sqlite")]
+    fn sqlite_store(store: SelectedMintStore) -> Arc<MintSqliteDatabase> {
+        match store {
+            SelectedMintStore::Sqlite(store) => store,
+            #[cfg(feature = "postgres")]
+            SelectedMintStore::Postgres(_) => panic!("these tests select the SQLite engine"),
+        }
+    }
 
     const TEST_MNEMONIC: &str =
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
@@ -3161,6 +3269,7 @@ engine = "sqlite"
             initial_setup(&work_dir, &bootstrap, password.clone())
                 .await
                 .expect("database");
+        let db = sqlite_store(db);
         let mut builder = MintBuilder::new(db.clone());
         builder
             .configure_unit(CurrencyUnit::Sat, Default::default())
@@ -3177,7 +3286,9 @@ engine = "sqlite"
             )
             .expect("legacy public key"),
         );
-        let mut tx = db.begin_transaction().await.expect("transaction");
+        let mut tx = cdk_common::database::MintDatabase::begin_transaction(&*db)
+            .await
+            .expect("transaction");
         tx.kv_write(
             "cdk_mint",
             "config",
@@ -3386,7 +3497,7 @@ engine = "sqlite"
             initial_setup(&work_dir, &bootstrap, password.clone())
                 .await
                 .expect("initialize database");
-        let mut builder = MintBuilder::new(localstore);
+        let mut builder = MintBuilder::new(sqlite_store(localstore));
         builder
             .configure_unit(CurrencyUnit::Sat, Default::default())
             .expect("configure sat unit");
@@ -3444,7 +3555,7 @@ engine = "sqlite"
             initial_setup(&work_dir, &bootstrap, password.clone())
                 .await
                 .expect("initialize database");
-        let mut builder = MintBuilder::new(localstore);
+        let mut builder = MintBuilder::new(sqlite_store(localstore));
         builder
             .configure_unit(CurrencyUnit::Sat, Default::default())
             .expect("configure sat unit");

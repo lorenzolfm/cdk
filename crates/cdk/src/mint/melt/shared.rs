@@ -6,8 +6,10 @@
 //!
 //! The functions here ensure consistency between these two code paths.
 
-use cdk_common::database::mint::Acquired;
-use cdk_common::database::{self, DynMintDatabase, DynMintTransaction};
+use std::sync::Arc;
+
+use cdk_common::database::mint::prelude::*;
+use cdk_common::database::{self, LockedBy, MintStore, MintTransaction};
 use cdk_common::mint::{self as mint_types};
 use cdk_common::nuts::{BlindSignature, BlindedMessage, MeltQuoteState, Proofs, State};
 use cdk_common::{Amount, CurrencyUnit, Error, PublicKey, QuoteId};
@@ -86,11 +88,14 @@ pub(crate) fn total_spent_for_quote_unit(
 ///
 /// Once committed, recovery will see `Finalizing` and must never compensate
 /// the melt.
-pub(crate) async fn persist_melt_finalization_handoff(
-    tx: &mut DynMintTransaction,
-    saga: &mut Acquired<mint_types::Saga>,
+pub(crate) async fn persist_melt_finalization_handoff<T>(
+    tx: &mut Box<T>,
+    saga: &mut T::Locked<mint_types::Saga>,
     payment_response: &cdk_common::payment::MakePaymentResponse,
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where
+    T: MintTransaction<database::Error> + Send + Sync,
+{
     let finalization_data = mint_types::MeltFinalizationData {
         total_spent: payment_response.total_spent.clone(),
         payment_lookup_id: payment_response.payment_lookup_id.clone(),
@@ -140,14 +145,17 @@ pub(crate) async fn persist_melt_finalization_handoff(
 /// Returns database errors if transaction fails, `Error::PaidQuote` if the
 /// quote is already paid, and `Error::UnknownPaymentState` if the saga has
 /// already advanced to `Finalizing` and must not be rolled back.
-pub async fn rollback_melt_quote(
-    db: &DynMintDatabase,
-    pubsub: &PubSubManager,
+pub async fn rollback_melt_quote<D>(
+    db: &Arc<D>,
+    pubsub: &PubSubManager<D>,
     quote_id: &QuoteId,
     input_ys: &[PublicKey],
     blinded_secrets: &[PublicKey],
     operation_id: &uuid::Uuid,
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where
+    D: MintStore,
+{
     if input_ys.is_empty() && blinded_secrets.is_empty() {
         return Ok(());
     }
@@ -167,14 +175,17 @@ pub async fn rollback_melt_quote(
 }
 
 /// Roll back setup only if the saga still proves payment was never attempted.
-pub(crate) async fn rollback_setup_melt_quote(
-    db: &DynMintDatabase,
-    pubsub: &PubSubManager,
+pub(crate) async fn rollback_setup_melt_quote<D>(
+    db: &Arc<D>,
+    pubsub: &PubSubManager<D>,
     quote_id: &QuoteId,
     input_ys: &[PublicKey],
     blinded_secrets: &[PublicKey],
     operation_id: &uuid::Uuid,
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where
+    D: MintStore,
+{
     if input_ys.is_empty() && blinded_secrets.is_empty() {
         return Ok(());
     }
@@ -194,14 +205,17 @@ pub(crate) async fn rollback_setup_melt_quote(
 }
 
 /// Roll back a melt only after an authoritative payment failure was recorded.
-pub(crate) async fn rollback_failed_melt_quote(
-    db: &DynMintDatabase,
-    pubsub: &PubSubManager,
+pub(crate) async fn rollback_failed_melt_quote<D>(
+    db: &Arc<D>,
+    pubsub: &PubSubManager<D>,
     quote_id: &QuoteId,
     input_ys: &[PublicKey],
     blinded_secrets: &[PublicKey],
     operation_id: &uuid::Uuid,
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where
+    D: MintStore,
+{
     if input_ys.is_empty() && blinded_secrets.is_empty() {
         return Ok(());
     }
@@ -220,15 +234,18 @@ pub(crate) async fn rollback_failed_melt_quote(
     .await
 }
 
-async fn rollback_melt_quote_inner(
-    mut tx: DynMintTransaction,
-    pubsub: &PubSubManager,
+async fn rollback_melt_quote_inner<D>(
+    mut tx: Box<D::Transaction>,
+    pubsub: &PubSubManager<D>,
     quote_id: &QuoteId,
     input_ys: &[PublicKey],
     blinded_secrets: &[PublicKey],
     operation_id: &uuid::Uuid,
     required_saga_state: Option<mint_types::MeltSagaState>,
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where
+    D: MintStore,
+{
     if input_ys.is_empty() && blinded_secrets.is_empty() {
         tx.rollback().await?;
         return Ok(());
@@ -384,15 +401,21 @@ async fn rollback_melt_quote_inner(
     Ok(())
 }
 
-enum MeltCleanupTransaction {
-    Ready(Box<dyn database::MintTransaction<database::Error> + Send + Sync>),
+enum MeltCleanupTransaction<D>
+where
+    D: MintStore,
+{
+    Ready(Box<D::Transaction>),
     AlreadyCompleted,
 }
 
-async fn begin_melt_cleanup_transaction(
-    db: &DynMintDatabase,
+async fn begin_melt_cleanup_transaction<D>(
+    db: &Arc<D>,
     quote_id: &QuoteId,
-) -> Result<MeltCleanupTransaction, Error> {
+) -> Result<MeltCleanupTransaction<D>, Error>
+where
+    D: MintStore,
+{
     let mut tx = db.begin_transaction().await?;
 
     // TX1 finalization and rollback both acquire these locks in this order. TX2
@@ -419,18 +442,24 @@ async fn begin_melt_cleanup_transaction(
     Ok(MeltCleanupTransaction::Ready(tx))
 }
 
-pub(super) enum MeltChangeResult {
+pub(super) enum MeltChangeResult<D>
+where
+    D: MintStore,
+{
     Ready {
         change_sigs: Option<Vec<BlindSignature>>,
-        tx: Box<dyn database::MintTransaction<database::Error> + Send + Sync>,
+        tx: Box<D::Transaction>,
     },
     AlreadyCompleted,
 }
 
-async fn begin_melt_change_without_signatures(
-    db: &DynMintDatabase,
+async fn begin_melt_change_without_signatures<D>(
+    db: &Arc<D>,
     quote_id: &QuoteId,
-) -> Result<MeltChangeResult, Error> {
+) -> Result<MeltChangeResult<D>, Error>
+where
+    D: MintStore,
+{
     Ok(match begin_melt_cleanup_transaction(db, quote_id).await? {
         MeltCleanupTransaction::Ready(tx) => MeltChangeResult::Ready {
             change_sigs: None,
@@ -478,15 +507,18 @@ async fn begin_melt_change_without_signatures(
 /// - Change calculation fails
 /// - Blind signing fails
 /// - Database operations fail
-pub(super) async fn process_melt_change(
-    mint: &super::super::Mint,
-    db: &DynMintDatabase,
+pub(super) async fn process_melt_change<D>(
+    mint: &super::super::Mint<D>,
+    db: &Arc<D>,
     quote_id: &QuoteId,
     inputs_amount: Amount<CurrencyUnit>,
     total_spent: Amount<CurrencyUnit>,
     inputs_fee: Amount<CurrencyUnit>,
     change_outputs: Vec<BlindedMessage>,
-) -> Result<MeltChangeResult, Error> {
+) -> Result<MeltChangeResult<D>, Error>
+where
+    D: MintStore,
+{
     let change_target: Amount = match inputs_amount
         .checked_sub(&total_spent)
         .ok()
@@ -616,10 +648,13 @@ pub(super) async fn process_melt_change(
 /// * [`Error::UnknownQuote`] if no quote exists with the given ID.
 /// * [`Error::PendingQuote`] (code 20005) if another quote with the same lookup ID is pending.
 /// * [`Error::RequestAlreadyPaid`] (code 20006) if another quote with the same lookup ID is paid.
-pub async fn load_melt_quotes_exclusively(
-    tx: &mut Box<dyn database::MintTransaction<database::Error> + Send + Sync>,
+pub async fn load_melt_quotes_exclusively<T>(
+    tx: &mut Box<T>,
     quote_id: &QuoteId,
-) -> Result<Acquired<MeltQuote>, Error> {
+) -> Result<T::Locked<MeltQuote>, Error>
+where
+    T: MintTransaction<database::Error> + Send + Sync,
+{
     // Lock ALL related quotes in a single atomic query to prevent deadlocks.
     // The query locks quotes ordered by ID, ensuring consistent lock acquisition order
     // across concurrent transactions.
@@ -684,7 +719,7 @@ pub async fn load_melt_quotes_exclusively(
 ///
 /// `Ok(Proofs)` — a clone of the input proofs (now marked Spent), which callers
 /// can use to compute the per-keyset fee breakdown for operation recording.
-/// The proofs are cloned out of the `Acquired` wrapper so that no database
+/// The proofs are cloned out of the locked wrapper so that no database
 /// row locks are held after this function returns.
 ///
 /// # Errors
@@ -694,17 +729,20 @@ pub async fn load_melt_quotes_exclusively(
 /// - Proofs are already spent
 /// - Database operations fail
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn finalize_melt_core(
-    mut tx: Box<dyn database::MintTransaction<database::Error> + Send + Sync>,
-    pubsub: &PubSubManager,
-    mut quote: Acquired<MeltQuote>,
+pub(crate) async fn finalize_melt_core<D>(
+    mut tx: Box<D::Transaction>,
+    pubsub: &PubSubManager<D>,
+    mut quote: LockedBy<D, MeltQuote>,
     input_ys: &[PublicKey],
     inputs_amount: Amount<CurrencyUnit>,
     inputs_fee: Amount<CurrencyUnit>,
     total_spent: Amount<CurrencyUnit>,
     payment_proof: Option<String>,
     payment_lookup_id: &cdk_common::payment::PaymentIdentifier,
-) -> Result<(Proofs, MeltQuote), Error> {
+) -> Result<(Proofs, MeltQuote), Error>
+where
+    D: MintStore,
+{
     // Validate quote amount vs payment amount
     if quote.amount() > total_spent {
         tracing::error!(
@@ -802,7 +840,7 @@ pub(crate) async fn finalize_melt_core(
         }
     };
 
-    if let Err(err) = Mint::update_proofs_state(&mut tx, &mut proofs, State::Spent).await {
+    if let Err(err) = Mint::<D>::update_proofs_state(&mut tx, &mut proofs, State::Spent).await {
         tx.rollback().await?;
         return Err(err);
     }
@@ -814,9 +852,9 @@ pub(crate) async fn finalize_melt_core(
         pubsub.proof_state((*pk, State::Spent));
     }
 
-    // Clone the proofs out of the Acquired wrapper so that no database
+    // Clone the proofs out of the locked wrapper so that no database
     // row locks are held after this function returns.
-    Ok((proofs.to_vec(), quote.inner()))
+    Ok((proofs.to_vec(), quote.into_inner()))
 }
 
 /// High-level melt finalization that handles the complete workflow.
@@ -847,16 +885,19 @@ pub(crate) async fn finalize_melt_core(
 ///
 /// `Option<Vec<BlindSignature>>` - Change signatures (if any)
 #[allow(clippy::too_many_arguments)]
-pub async fn finalize_melt_quote(
-    mint: &super::super::Mint,
-    db: &DynMintDatabase,
-    pubsub: &PubSubManager,
+pub async fn finalize_melt_quote<D>(
+    mint: &super::super::Mint<D>,
+    db: &Arc<D>,
+    pubsub: &PubSubManager<D>,
     quote: &MeltQuote,
     total_spent: Amount<CurrencyUnit>,
     payment_proof: Option<String>,
     payment_lookup_id: &cdk_common::payment::PaymentIdentifier,
     operation_id: Option<uuid::Uuid>,
-) -> Result<Option<Vec<BlindSignature>>, Error> {
+) -> Result<Option<Vec<BlindSignature>>, Error>
+where
+    D: MintStore,
+{
     tracing::debug!("Finalizing melt quote {}", quote.id);
 
     let total_spent = total_spent_for_quote_unit(&total_spent, &quote.unit)?;
@@ -877,7 +918,7 @@ pub async fn finalize_melt_quote(
         Some(info) => info,
         None => {
             if locked_quote.state == MeltQuoteState::Paid {
-                let locked_quote = locked_quote.inner();
+                let locked_quote = locked_quote.into_inner();
 
                 if locked_quote.request_lookup_id.as_ref() != Some(payment_lookup_id)
                     || locked_quote.payment_proof != payment_proof
@@ -944,7 +985,7 @@ pub async fn finalize_melt_quote(
     // We still need the proofs for fee calculation (operation recording), so fetch
     // them from the DB even in the already-Paid case.
     let (proofs, quote) = if locked_quote.state == MeltQuoteState::Paid {
-        let locked_quote = locked_quote.inner();
+        let locked_quote = locked_quote.into_inner();
 
         if !settlement_matches(&locked_quote) {
             tx.rollback().await?;
@@ -959,7 +1000,7 @@ pub async fn finalize_melt_quote(
         let spend_pending = proofs_with_state.state == State::Pending;
         if spend_pending {
             if let Err(err) =
-                Mint::update_proofs_state(&mut tx, &mut proofs_with_state, State::Spent).await
+                Mint::<D>::update_proofs_state(&mut tx, &mut proofs_with_state, State::Spent).await
             {
                 tx.rollback().await?;
                 return Err(err);

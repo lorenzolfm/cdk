@@ -1,7 +1,8 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use cdk_common::database::DynMintDatabase;
+use cdk_common::database::mint::prelude::*;
+use cdk_common::database::MintStore;
 use cdk_common::mint::{MeltFinalizationData, MeltSagaState, Operation, Saga, SagaStateEnum};
 use cdk_common::nut00::KnownMethod;
 use cdk_common::nuts::MeltQuoteState;
@@ -135,12 +136,15 @@ mod tests;
 /// - State-specific data (e.g., payment_result) only exists in the appropriate state type
 /// - No runtime state checks or `Option<T>` unwrapping needed
 /// - IDE autocomplete only shows valid operations for each state
-pub struct MeltSaga<S> {
-    mint: Arc<super::Mint>,
-    db: DynMintDatabase,
-    pubsub: Arc<PubSubManager>,
+pub struct MeltSaga<D, S>
+where
+    D: MintStore,
+{
+    mint: Arc<super::Mint<D>>,
+    db: Arc<D>,
+    pubsub: Arc<PubSubManager<D>>,
     /// Compensating actions in LIFO order (most recent first)
-    compensations: Arc<Mutex<VecDeque<Box<dyn CompensatingAction>>>>,
+    compensations: Arc<Mutex<VecDeque<Box<dyn CompensatingAction<D>>>>>,
     /// Operation ID (used for saga tracking, generated upfront)
     operation_id: uuid::Uuid,
     /// Tracks melt metrics through the saga lifecycle.
@@ -150,8 +154,11 @@ pub struct MeltSaga<S> {
     state_data: S,
 }
 
-impl MeltSaga<Initial> {
-    pub fn new(mint: Arc<super::Mint>, db: DynMintDatabase, pubsub: Arc<PubSubManager>) -> Self {
+impl<D> MeltSaga<D, Initial>
+where
+    D: MintStore,
+{
+    pub fn new(mint: Arc<super::Mint<D>>, db: Arc<D>, pubsub: Arc<PubSubManager<D>>) -> Self {
         #[cfg(feature = "prometheus")]
         let metrics = Some(MintMetricGuard::new("melt_bolt11"));
 
@@ -205,7 +212,7 @@ impl MeltSaga<Initial> {
         melt_request: &MeltRequest<QuoteId>,
         input_verification: Verification,
         payment_method: cdk_common::PaymentMethod,
-    ) -> Result<MeltSaga<SetupComplete>, Error> {
+    ) -> Result<MeltSaga<D, SetupComplete>, Error> {
         let Verification {
             amount: input_amount,
         } = input_verification;
@@ -272,7 +279,8 @@ impl MeltSaga<Initial> {
 
         let mut proofs = tx.get_proofs(&input_ys).await?;
 
-        if let Err(err) = Mint::update_proofs_state(&mut tx, &mut proofs, State::Pending).await {
+        if let Err(err) = Mint::<D>::update_proofs_state(&mut tx, &mut proofs, State::Pending).await
+        {
             tx.rollback().await?;
             return Err(err);
         }
@@ -439,7 +447,7 @@ impl MeltSaga<Initial> {
             }));
 
         // Transition to SetupComplete state
-        // Extract inner MeltQuote from Acquired wrapper - the lock was only meaningful
+        // Extract inner MeltQuote from the locked wrapper - the lock was only meaningful
         // within the transaction that just committed
         Ok(MeltSaga {
             mint: self.mint,
@@ -450,13 +458,16 @@ impl MeltSaga<Initial> {
             #[cfg(feature = "prometheus")]
             metrics: self.metrics,
             state_data: SetupComplete {
-                quote: quote.inner(),
+                quote: quote.into_inner(),
             },
         })
     }
 }
 
-impl MeltSaga<SetupComplete> {
+impl<D> MeltSaga<D, SetupComplete>
+where
+    D: MintStore,
+{
     /// Attempts to settle the melt internally (melt-to-mint on same mint).
     ///
     /// This checks if the payment request corresponds to an existing mint quote
@@ -677,7 +688,7 @@ impl MeltSaga<SetupComplete> {
     pub async fn make_payment(
         self,
         settlement: SettlementDecision,
-    ) -> Result<PaymentOutcome, Error> {
+    ) -> Result<PaymentOutcome<D>, Error> {
         let payment_result = match settlement {
             SettlementDecision::Internal { amount } => self.handle_internal_payment(amount),
             SettlementDecision::RequiresExternalPayment => {
@@ -1127,7 +1138,10 @@ impl MeltSaga<SetupComplete> {
     }
 }
 
-impl MeltSaga<PaymentConfirmed> {
+impl<D> MeltSaga<D, PaymentConfirmed>
+where
+    D: MintStore,
+{
     /// Finalizes the melt by committing signatures and marking inputs as spent.
     ///
     /// This is the second and final transaction (TX2) in the saga and completes the melt.
@@ -1272,9 +1286,12 @@ impl MeltSaga<PaymentConfirmed> {
 /// that completed (and is ready to finalize) and one that the backend reports
 /// as still in flight (and must be resolved asynchronously via the pending
 /// melt wait loop or a payment event).
-pub enum PaymentOutcome {
+pub enum PaymentOutcome<D>
+where
+    D: MintStore,
+{
     /// Payment was confirmed by the backend; the saga is ready to be finalized.
-    Confirmed(Box<MeltSaga<PaymentConfirmed>>),
+    Confirmed(Box<MeltSaga<D, PaymentConfirmed>>),
     /// Payment is still pending at the backend. Inputs and outputs remain
     /// reserved and the quote is left in `Pending`; polling may finalize a
     /// successful payment, while rollback requires an authoritative permanent
@@ -1287,7 +1304,10 @@ pub enum PaymentOutcome {
     },
 }
 
-impl<S> MeltSaga<S> {
+impl<D, S> MeltSaga<D, S>
+where
+    D: MintStore,
+{
     /// Execute all compensating actions and consume the saga.
     ///
     /// This method takes ownership of self to ensure the saga cannot be used

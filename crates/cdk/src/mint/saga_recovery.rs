@@ -3,6 +3,10 @@
 //! This module contains functions used by both startup recovery and on-demand quote checking
 //! to process melt saga outcomes consistently.
 
+use std::sync::Arc;
+
+use cdk_common::database::mint::prelude::*;
+use cdk_common::database::{self, MintStore, MintTransaction};
 use cdk_common::mint::{MeltFinalizationData, MeltQuote, MeltSagaState, Saga, SagaStateEnum};
 use cdk_common::nuts::MeltQuoteState;
 use cdk_common::payment::MakePaymentResponse;
@@ -40,14 +44,17 @@ use crate::Error;
 /// # Returns
 /// Ok(()) on success, or an error if processing fails
 #[instrument(skip_all)]
-pub(crate) async fn process_melt_saga_outcome(
+pub(crate) async fn process_melt_saga_outcome<D>(
     saga: &Saga,
     quote: &mut MeltQuote,
     payment_response: &MakePaymentResponse,
-    db: &cdk_common::database::DynMintDatabase,
-    pubsub: &PubSubManager,
-    mint: &Mint,
-) -> Result<(), Error> {
+    db: &Arc<D>,
+    pubsub: &PubSubManager<D>,
+    mint: &Mint<D>,
+) -> Result<(), Error>
+where
+    D: MintStore,
+{
     match payment_response.status {
         MeltQuoteState::Paid => {
             finalize_paid_melt_outcome(saga, quote, payment_response, db, pubsub, mint).await
@@ -109,32 +116,41 @@ pub(crate) async fn process_melt_saga_outcome(
 /// [`cdk_common::payment::Event::PaymentFailed`] is an orchestration-level
 /// terminal signal, so event and polling outcomes share the same processing
 /// path.
-pub(crate) async fn process_melt_saga_failure_event(
+pub(crate) async fn process_melt_saga_failure_event<D>(
     saga: &Saga,
     quote: &mut MeltQuote,
     payment_response: &MakePaymentResponse,
-    db: &cdk_common::database::DynMintDatabase,
-    pubsub: &PubSubManager,
-    mint: &Mint,
-) -> Result<(), Error> {
+    db: &Arc<D>,
+    pubsub: &PubSubManager<D>,
+    mint: &Mint<D>,
+) -> Result<(), Error>
+where
+    D: MintStore,
+{
     process_melt_saga_outcome(saga, quote, payment_response, db, pubsub, mint).await
 }
 
-async fn persist_pending_after_dispatch(
+async fn persist_pending_after_dispatch<D>(
     stale_saga: &Saga,
     quote: &mut MeltQuote,
     payment_response: &MakePaymentResponse,
-    db: &cdk_common::database::DynMintDatabase,
-) -> Result<(), Error> {
+    db: &Arc<D>,
+) -> Result<(), Error>
+where
+    D: MintStore,
+{
     persist_payment_lookup_id(stale_saga, quote, payment_response, db).await
 }
 
-async fn persist_permanent_payment_failure(
+async fn persist_permanent_payment_failure<D>(
     stale_saga: &Saga,
     quote: &mut MeltQuote,
-    db: &cdk_common::database::DynMintDatabase,
+    db: &Arc<D>,
     payment_response: &MakePaymentResponse,
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where
+    D: MintStore,
+{
     let mut tx = db.begin_transaction().await?;
     let Some(mut current_saga) = tx.get_saga_for_update(&stale_saga.operation_id).await? else {
         tx.rollback().await?;
@@ -183,12 +199,15 @@ async fn persist_permanent_payment_failure(
 }
 
 /// Compensate a melt only when a durable authoritative failure was recorded.
-pub(crate) async fn recover_recorded_payment_failure(
+pub(crate) async fn recover_recorded_payment_failure<D>(
     stale_saga: &Saga,
     quote: &mut MeltQuote,
-    db: &cdk_common::database::DynMintDatabase,
-    pubsub: &PubSubManager,
-) -> Result<(), Error> {
+    db: &Arc<D>,
+    pubsub: &PubSubManager<D>,
+) -> Result<(), Error>
+where
+    D: MintStore,
+{
     let current_saga = db.get_melt_saga_by_quote_id(&quote.id).await?;
     let Some(saga) = current_saga else {
         *quote = db
@@ -246,24 +265,30 @@ pub(crate) async fn recover_recorded_payment_failure(
 
 /// Persists a backend-provided lookup id so later checks can recover a pending
 /// payment even when no identifier was available at quote creation.
-async fn persist_payment_lookup_id(
+async fn persist_payment_lookup_id<D>(
     saga: &Saga,
     quote: &mut MeltQuote,
     payment_response: &MakePaymentResponse,
-    db: &cdk_common::database::DynMintDatabase,
-) -> Result<(), Error> {
+    db: &Arc<D>,
+) -> Result<(), Error>
+where
+    D: MintStore,
+{
     let mut tx = db.begin_transaction().await?;
     persist_payment_lookup_id_in_transaction(&mut tx, saga, quote, payment_response).await?;
     tx.commit().await?;
     Ok(())
 }
 
-async fn persist_payment_lookup_id_in_transaction(
-    tx: &mut cdk_common::database::DynMintTransaction,
+async fn persist_payment_lookup_id_in_transaction<T>(
+    tx: &mut Box<T>,
     saga: &Saga,
     quote: &mut MeltQuote,
     payment_response: &MakePaymentResponse,
-) -> Result<(), Error> {
+) -> Result<(), Error>
+where
+    T: MintTransaction<database::Error> + Send + Sync,
+{
     let current_saga = tx
         .get_saga_for_update(&saga.operation_id)
         .await?
@@ -298,14 +323,17 @@ async fn persist_payment_lookup_id_in_transaction(
 
 /// Persists the paid outcome as a durable `Finalizing` handoff, then runs the
 /// single shared finalization path.
-async fn finalize_paid_melt_outcome(
+async fn finalize_paid_melt_outcome<D>(
     saga: &Saga,
     quote: &mut MeltQuote,
     payment_response: &MakePaymentResponse,
-    db: &cdk_common::database::DynMintDatabase,
-    pubsub: &PubSubManager,
-    mint: &Mint,
-) -> Result<(), Error> {
+    db: &Arc<D>,
+    pubsub: &PubSubManager<D>,
+    mint: &Mint<D>,
+) -> Result<(), Error>
+where
+    D: MintStore,
+{
     tracing::info!(
         "Finalizing paid melt quote {} (saga {})",
         quote.id,
@@ -401,7 +429,7 @@ mod tests {
 
     use super::*;
     use crate::mint::melt::melt_saga::MeltSaga;
-    use crate::test_helpers::mint::{create_test_mint, mint_test_proofs};
+    use crate::test_helpers::mint::{create_test_mint, mint_test_proofs, TestMint};
 
     /// A negative observation must not trigger a second backend check: the
     /// status is an authoritative terminal outcome by contract, so the melt
@@ -1719,7 +1747,7 @@ mod tests {
     /// payment states from `check_outgoing_payment` (keyed by payment hash).
     async fn create_test_mint_with_payment_states(
         payment_states: std::collections::HashMap<String, (MeltQuoteState, Amount<CurrencyUnit>)>,
-    ) -> Result<crate::mint::Mint, Error> {
+    ) -> Result<TestMint, Error> {
         use crate::mint::{MintBuilder, MintMeltLimits};
         use crate::types::{FeeReserve, QuoteTTL};
 
@@ -1761,7 +1789,7 @@ mod tests {
         Ok(mint)
     }
 
-    async fn create_test_melt_quote(mint: &crate::mint::Mint, amount: Amount) -> MeltQuote {
+    async fn create_test_melt_quote(mint: &TestMint, amount: Amount) -> MeltQuote {
         use cdk_common::melt::MeltQuoteRequest;
 
         let fake_description = FakeInvoiceDescription {
@@ -1799,7 +1827,7 @@ mod tests {
         cdk_common::nuts::MeltRequest::new(quote.id.clone(), proofs.clone(), None)
     }
 
-    async fn assert_saga_exists(mint: &crate::mint::Mint, operation_id: &uuid::Uuid) -> Saga {
+    async fn assert_saga_exists(mint: &TestMint, operation_id: &uuid::Uuid) -> Saga {
         mint.localstore
             .get_incomplete_sagas(OperationKind::Melt)
             .await
@@ -1809,7 +1837,7 @@ mod tests {
             .expect("saga should exist in database")
     }
 
-    async fn assert_single_melt_saga_operation_id(mint: &crate::mint::Mint) -> uuid::Uuid {
+    async fn assert_single_melt_saga_operation_id(mint: &TestMint) -> uuid::Uuid {
         let sagas = mint
             .localstore
             .get_incomplete_sagas(OperationKind::Melt)
@@ -1820,7 +1848,7 @@ mod tests {
         sagas[0].operation_id
     }
 
-    async fn assert_saga_not_exists(mint: &crate::mint::Mint, operation_id: &uuid::Uuid) {
+    async fn assert_saga_not_exists(mint: &TestMint, operation_id: &uuid::Uuid) {
         let sagas = mint
             .localstore
             .get_incomplete_sagas(OperationKind::Melt)
@@ -1834,7 +1862,7 @@ mod tests {
     }
 
     async fn assert_proofs_state(
-        mint: &crate::mint::Mint,
+        mint: &TestMint,
         ys: &[cdk_common::PublicKey],
         expected_state: Option<State>,
     ) {

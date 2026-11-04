@@ -1,6 +1,7 @@
 //! In-memory database that is provided by the `cdk-sqlite` crate, mainly for testing purposes.
 use std::collections::HashMap;
 
+use cdk_common::database::mint::prelude::*;
 use cdk_common::database::{self, MintDatabase, MintKeysDatabase};
 use cdk_common::mint::{self, MintKeySetInfo, MintQuote, Operation};
 use cdk_common::nuts::{CurrencyUnit, Id, Proofs, State};

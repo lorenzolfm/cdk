@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use bitcoin::bip32::DerivationPath;
-use cdk_common::database::{DynMintAuthDatabase, DynMintDatabase, MintKeysDatabase};
+use cdk_common::database::{DynMintAuthDatabase, MintKeysDatabase, MintStore};
 use cdk_common::error::Error;
 use cdk_common::nut00::KnownMethod;
 use cdk_common::nut04::MintMethodOptions;
@@ -61,9 +61,12 @@ pub struct KeysetRotation {
 }
 
 /// Cashu Mint Builder
-pub struct MintBuilder {
+pub struct MintBuilder<D>
+where
+    D: MintStore,
+{
     mint_info: MintInfo,
-    localstore: DynMintDatabase,
+    localstore: Arc<D>,
     auth_localstore: Option<DynMintAuthDatabase>,
     clear_auth_endpoints: Vec<ProtectedEndpoint>,
     blind_auth_endpoints: Vec<ProtectedEndpoint>,
@@ -83,7 +86,10 @@ pub struct MintBuilder {
     keyset_refresh_interval: Option<std::time::Duration>,
 }
 
-impl std::fmt::Debug for MintBuilder {
+impl<D> std::fmt::Debug for MintBuilder<D>
+where
+    D: MintStore,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MintBuilder")
             .field("mint_info", &self.mint_info)
@@ -92,9 +98,12 @@ impl std::fmt::Debug for MintBuilder {
     }
 }
 
-impl MintBuilder {
+impl<D> MintBuilder<D>
+where
+    D: MintStore,
+{
     /// New [`MintBuilder`]
-    pub fn new(localstore: DynMintDatabase) -> MintBuilder {
+    pub fn new(localstore: Arc<D>) -> Self {
         let mint_info = MintInfo {
             nuts: Nuts::new()
                 .nut07(true)
@@ -109,7 +118,7 @@ impl MintBuilder {
             ..Default::default()
         };
 
-        MintBuilder {
+        Self {
             mint_info,
             localstore,
             auth_localstore: None,
@@ -605,7 +614,7 @@ impl MintBuilder {
     pub async fn build_with_signatory(
         #[allow(unused_mut)] mut self,
         signatory: Arc<dyn Signatory + Send + Sync>,
-    ) -> Result<Mint, Error> {
+    ) -> Result<Mint<D>, Error> {
         // Check active keysets and rotate if necessary
         let active_keysets = signatory.keysets().await?;
 
@@ -750,7 +759,7 @@ impl MintBuilder {
         self,
         keystore: Arc<dyn MintKeysDatabase<Err = cdk_database::Error> + Send + Sync>,
         seed: &[u8],
-    ) -> Result<Mint, Error> {
+    ) -> Result<Mint<D>, Error> {
         let in_memory_signatory = Arc::new(
             cdk_signatory::db_signatory::DbSignatory::new(
                 keystore,
@@ -882,7 +891,8 @@ mod tests {
         }
     }
 
-    async fn builder_with_bolt11_processor() -> (MintBuilder, Arc<MintSqliteDatabase>) {
+    async fn builder_with_bolt11_processor(
+    ) -> (MintBuilder<MintSqliteDatabase>, Arc<MintSqliteDatabase>) {
         let localstore = Arc::new(memory::empty().await.expect("mint db"));
         let mut builder = MintBuilder::new(localstore.clone());
 

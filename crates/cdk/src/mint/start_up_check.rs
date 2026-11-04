@@ -6,7 +6,8 @@
 use std::str::FromStr;
 use std::time::Duration;
 
-use cdk_common::database::DynMintTransaction;
+use cdk_common::database::mint::prelude::*;
+use cdk_common::database::MintStore;
 use cdk_common::mint::{MeltPaymentRequest, OperationKind, Saga};
 use cdk_common::payment::PaymentIdentifier;
 use cdk_common::util::unix_time;
@@ -29,7 +30,10 @@ enum SwapSagaRecoveryAction {
     SkipCompensation,
 }
 
-impl Mint {
+impl<D> Mint<D>
+where
+    D: MintStore,
+{
     /// Returns the stable identifier a payment backend receives for this
     /// quote, including quotes created before that identifier was persisted.
     fn melt_payment_lookup_id(quote: &MeltQuote) -> PaymentIdentifier {
@@ -163,7 +167,7 @@ impl Mint {
 
     /// Transaction-scoped internal-settlement check used by reconciliation.
     pub(crate) async fn internal_melt_settlement_response_tx(
-        tx: &mut DynMintTransaction,
+        tx: &mut Box<D::Transaction>,
         quote: &MeltQuote,
     ) -> Result<Option<crate::cdk_payment::MakePaymentResponse>, Error> {
         let Some(mint_quote) = tx
@@ -978,7 +982,7 @@ mod tests {
     use super::*;
     use crate::mint::swap::swap_saga::SwapSaga;
     use crate::test_helpers::mint::{
-        create_test_blinded_messages, create_test_mint, mint_test_proofs,
+        create_test_blinded_messages, create_test_mint, mint_test_proofs, TestMint as Mint,
     };
 
     #[tokio::test]

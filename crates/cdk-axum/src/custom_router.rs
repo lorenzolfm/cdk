@@ -6,6 +6,7 @@
 use axum::routing::{get, post};
 use axum::Router;
 use cdk::nuts::PaymentMethod;
+use cdk_common::database::MintStore;
 
 use crate::custom_handlers::{
     cache_post_batch_mint, cache_post_melt_custom, cache_post_mint_custom,
@@ -27,7 +28,13 @@ use crate::MintState;
 /// - `/melt/{method}` - POST: Melt tokens
 ///
 /// The {method} parameter captures the payment method name dynamically.
-pub fn create_custom_routers(state: MintState, custom_methods: Vec<String>) -> Router<MintState> {
+pub fn create_custom_routers<D>(
+    state: MintState<D>,
+    custom_methods: Vec<String>,
+) -> Router<MintState<D>>
+where
+    D: MintStore,
+{
     tracing::info!(
         "Creating routes for {} custom payment methods: {:?}",
         custom_methods.len(),

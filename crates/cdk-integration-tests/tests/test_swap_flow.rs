@@ -18,14 +18,14 @@ use cashu::{
     CurrencyUnit, Id, PaymentMethod, PreMintSecrets, SecretKey, SpendingConditions, State,
     SwapRequest,
 };
-use cdk::mint::Mint;
 use cdk::nuts::nut00::ProofsMethods;
 use cdk::Amount;
+use cdk_common::database::mint::prelude::*;
 use cdk_fake_wallet::create_fake_invoice;
 use cdk_integration_tests::init_pure_tests::*;
 
 /// Helper to get the active keyset ID from a mint
-async fn get_keyset_id(mint: &Mint) -> Id {
+async fn get_keyset_id(mint: &TestMint) -> Id {
     let keys = mint.pubkeys().keysets.first().unwrap().clone();
     keys.verify_id()
         .expect("Keyset ID generation is successful");

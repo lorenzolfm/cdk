@@ -10,7 +10,8 @@ use cashu::nut00::KnownMethod;
 use cashu::quote_id::QuoteId;
 use cashu::{Amount, BlindSignature, CurrencyUnit, Id, SecretKey};
 
-use crate::database::mint::{Database, DynMintDatabase, Error, KeysDatabase};
+use crate::database::mint::prelude::*;
+use crate::database::mint::{Database, Error, KeysDatabase, MintStore};
 use crate::database::MintSignaturesDatabase;
 use crate::mint::{MeltPaymentRequest, MeltQuote, MintQuote, Operation};
 use crate::payment::PaymentIdentifier;
@@ -1919,7 +1920,10 @@ where
 ///
 /// This test is invoked explicitly by the PostgreSQL suite because SQLite does
 /// not provide row-level `FOR UPDATE` locking.
-pub async fn concurrent_mint_quote_batches_use_consistent_lock_order(db: DynMintDatabase) {
+pub async fn concurrent_mint_quote_batches_use_consistent_lock_order<DB>(db: std::sync::Arc<DB>)
+where
+    DB: MintStore,
+{
     let quote1 = MintQuote::new(
         None,
         unique_string(),

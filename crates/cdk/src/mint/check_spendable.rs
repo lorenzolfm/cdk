@@ -1,11 +1,15 @@
 use std::collections::HashMap;
 
+use cdk_common::database::MintStore;
 use tracing::instrument;
 
 use super::{CheckStateRequest, CheckStateResponse, Mint, ProofState, State};
 use crate::Error;
 
-impl Mint {
+impl<D> Mint<D>
+where
+    D: MintStore,
+{
     /// Check state
     #[instrument(skip_all)]
     pub async fn check_state(
@@ -77,12 +81,12 @@ impl Mint {
 
 #[cfg(test)]
 mod tests {
+    use cdk_common::database::mint::prelude::*;
     use cdk_common::mint::Operation;
     use cdk_common::nuts::{CheckStateRequest, ProofsMethods};
     use cdk_common::{Amount, State};
 
-    use crate::test_helpers::mint::{create_test_mint, mint_test_proofs};
-    use crate::Mint;
+    use crate::test_helpers::mint::{create_test_mint, mint_test_proofs, TestMint as Mint};
 
     async fn check_state_witness_for_proof_state(state: State) -> bool {
         let mint = create_test_mint().await.unwrap();

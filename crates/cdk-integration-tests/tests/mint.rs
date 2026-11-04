@@ -21,6 +21,7 @@ use cashu::PaymentMethod;
 use cdk::mint::{MintBuilder, MintMeltLimits};
 use cdk::nuts::CurrencyUnit;
 use cdk::types::{FeeReserve, QuoteTTL};
+use cdk_common::database::mint::prelude::*;
 use cdk_fake_wallet::FakeWallet;
 use cdk_sqlite::mint::memory;
 

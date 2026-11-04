@@ -1,10 +1,14 @@
+use cdk_common::database::MintStore;
 use tracing::instrument;
 
 use crate::mint::nut22::MintAuthRequest;
 use crate::mint::{AuthToken, MintResponse};
 use crate::{Amount, Error, Mint};
 
-impl Mint {
+impl<D> Mint<D>
+where
+    D: MintStore,
+{
     /// Mint Auth Proofs
     #[instrument(skip_all)]
     pub async fn mint_blind_auth(

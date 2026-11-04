@@ -1,12 +1,15 @@
-use cdk_common::database::mint::Acquired;
-use cdk_common::database::DynMintTransaction;
+use cdk_common::database::mint::prelude::*;
+use cdk_common::database::{LockedBy, MintStore};
 use cdk_common::mint::ProofsWithState;
 use cdk_common::state::{self, check_state_transition};
 use cdk_common::{Error, State};
 
 use crate::Mint;
 
-impl Mint {
+impl<D> Mint<D>
+where
+    D: MintStore,
+{
     /// Updates the state of proofs with validation and error handling.
     ///
     /// This method:
@@ -19,8 +22,8 @@ impl Mint {
     /// - [`Error::UnexpectedProofState`] if the state transition is invalid
     /// - [`Error::TokenAlreadySpent`] if the database rejects the update (proofs already spent)
     pub async fn update_proofs_state(
-        tx: &mut DynMintTransaction,
-        proofs: &mut Acquired<ProofsWithState>,
+        tx: &mut Box<D::Transaction>,
+        proofs: &mut LockedBy<D, ProofsWithState>,
         new_state: State,
     ) -> Result<(), Error> {
         check_state_transition(proofs.state, new_state).map_err(|err| match err {
@@ -41,12 +44,12 @@ impl Mint {
 
 #[cfg(test)]
 mod tests {
+    use cdk_common::database::mint::prelude::*;
     use cdk_common::mint::Operation;
     use cdk_common::nuts::ProofsMethods;
     use cdk_common::{Amount, Error, State};
 
-    use crate::test_helpers::mint::{create_test_mint, mint_test_proofs};
-    use crate::Mint;
+    use crate::test_helpers::mint::{create_test_mint, mint_test_proofs, TestMint as Mint};
 
     /// Test successful transition from Unspent to Pending
     #[tokio::test]

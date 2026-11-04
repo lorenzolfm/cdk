@@ -10,6 +10,7 @@ use cdk::ws::{
     notification_to_ws_message, NotificationInner, WsErrorBody, WsMessageOrResponse,
     WsMethodRequest, WsRequest,
 };
+use cdk_common::database::MintStore;
 use cdk_common::terminal::escape_control;
 use futures::StreamExt;
 use serde_json::error::Category;
@@ -24,10 +25,13 @@ mod unsubscribe;
 pub(crate) const MAX_SUBSCRIPTIONS_PER_CONNECTION: usize = 100;
 pub(crate) const MAX_FILTERS_PER_SUBSCRIPTION: usize = 1000;
 
-async fn process(
-    context: &mut WsContext,
+async fn process<D>(
+    context: &mut WsContext<D>,
     body: WsRequest,
-) -> Result<serde_json::Value, serde_json::Error> {
+) -> Result<serde_json::Value, serde_json::Error>
+where
+    D: MintStore,
+{
     let response = match body.method {
         WsMethodRequest::Subscribe(sub) => subscribe::handle(context, sub).await,
         WsMethodRequest::Unsubscribe(unsub) => unsubscribe::handle(context, unsub).await,
@@ -141,13 +145,19 @@ fn error_response(
 
 pub use error::WsError;
 
-pub struct WsContext {
-    state: MintState,
+pub struct WsContext<D>
+where
+    D: MintStore,
+{
+    state: MintState<D>,
     subscriptions: HashMap<Arc<SubId>, tokio::task::JoinHandle<()>>,
     publisher: mpsc::Sender<(Arc<SubId>, NotificationPayload<QuoteId>)>,
 }
 
-impl Drop for WsContext {
+impl<D> Drop for WsContext<D>
+where
+    D: MintStore,
+{
     fn drop(&mut self) {
         for (_, handle) in self.subscriptions.drain() {
             handle.abort();
@@ -161,7 +171,10 @@ impl Drop for WsContext {
 ///
 /// For simplicity sake this function will spawn tasks for each subscription and
 /// keep them in a hashmap, and will have a single subscriber for all of them.
-pub async fn main_websocket(mut socket: WebSocket, state: MintState) {
+pub async fn main_websocket<D>(mut socket: WebSocket, state: MintState<D>)
+where
+    D: MintStore,
+{
     let (publisher, mut subscriber) = mpsc::channel(100);
     let mut context = WsContext {
         state,
@@ -288,6 +301,8 @@ mod tests {
 
     use super::*;
     use crate::cache::HttpCache;
+
+    type TestDb = cdk_sqlite::mint::MintSqliteDatabase;
 
     fn rejection_of(text: &str) -> serde_json::Value {
         match deserialize_request(text).expect_err("a rejected request") {
@@ -543,7 +558,10 @@ mod tests {
         }
     }
 
-    async fn create_test_mint_with_limits(max_inputs: usize, max_outputs: usize) -> Arc<Mint> {
+    async fn create_test_mint_with_limits(
+        max_inputs: usize,
+        max_outputs: usize,
+    ) -> Arc<Mint<TestDb>> {
         let localstore = Arc::new(memory::empty().await.expect("in-memory db"));
 
         let seed = [0u8; 32];
@@ -589,7 +607,7 @@ mod tests {
         )
     }
 
-    async fn create_test_mint() -> Arc<Mint> {
+    async fn create_test_mint() -> Arc<Mint<TestDb>> {
         create_test_mint_with_limits(1000, 1000).await
     }
 
@@ -605,7 +623,7 @@ mod tests {
         }
     }
 
-    fn make_context(mint: Arc<Mint>) -> WsContext {
+    fn make_context(mint: Arc<Mint<TestDb>>) -> WsContext<TestDb> {
         let state = MintState {
             mint,
             cache: Arc::new(HttpCache::default()),

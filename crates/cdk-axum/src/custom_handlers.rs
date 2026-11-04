@@ -21,6 +21,7 @@ use cdk::nuts::{
     MintQuoteOnchainResponse, MintRequest, MintResponse, PaymentMethod,
 };
 use cdk::{MeltQuoteCreateResponse, MeltQuoteResponse};
+use cdk_common::database::MintStore;
 use serde_json::Value;
 use tracing::instrument;
 
@@ -93,11 +94,14 @@ fn melt_quote_create_response_to_json(response: MeltQuoteCreateResponse<QuoteId>
     }
 }
 
-async fn validate_melt_quote_method(
-    state: &MintState,
+async fn validate_melt_quote_method<D>(
+    state: &MintState<D>,
     method: &str,
     quote_id: &QuoteId,
-) -> Result<(), cdk::Error> {
+) -> Result<(), cdk::Error>
+where
+    D: MintStore,
+{
     let quote_method = state.mint.get_melt_quote_method(quote_id).await?;
     let expected_method = PaymentMethod::from(method);
 
@@ -109,10 +113,13 @@ async fn validate_melt_quote_method(
 }
 
 // Validate batch bounds before any per-quote database work, including on cache hits.
-async fn validate_batch_quote_ids(
-    state: &MintState,
+async fn validate_batch_quote_ids<D>(
+    state: &MintState<D>,
     quote_ids: &[QuoteId],
-) -> Result<(), cdk::Error> {
+) -> Result<(), cdk::Error>
+where
+    D: MintStore,
+{
     if quote_ids.is_empty() {
         return Err(cdk::Error::UnknownQuote);
     }
@@ -137,11 +144,14 @@ async fn validate_batch_quote_ids(
     Ok(())
 }
 
-async fn validate_mint_quote_methods(
-    state: &MintState,
+async fn validate_mint_quote_methods<D>(
+    state: &MintState<D>,
     method: &str,
     quote_ids: &[QuoteId],
-) -> Result<(), cdk::Error> {
+) -> Result<(), cdk::Error>
+where
+    D: MintStore,
+{
     let expected_method = PaymentMethod::from(method);
 
     for quote_id in quote_ids {
@@ -155,12 +165,15 @@ async fn validate_mint_quote_methods(
     Ok(())
 }
 
-async fn validate_mint_request_route(
+async fn validate_mint_request_route<D>(
     auth: AuthHeader,
-    state: &MintState,
+    state: &MintState<D>,
     method: &str,
     quote_ids: &[QuoteId],
-) -> Result<(), cdk::Error> {
+) -> Result<(), cdk::Error>
+where
+    D: MintStore,
+{
     state
         .mint
         .verify_auth(
@@ -172,19 +185,25 @@ async fn validate_mint_request_route(
     validate_mint_quote_methods(state, method, quote_ids).await
 }
 
-async fn process_mint_input(
-    state: &MintState,
+async fn process_mint_input<D>(
+    state: &MintState<D>,
     input: cdk::mint::MintInput,
-) -> Result<MintResponse, cdk::Error> {
+) -> Result<MintResponse, cdk::Error>
+where
+    D: MintStore,
+{
     state.mint.process_mint_request(input).await
 }
 
-async fn validate_melt_request_route(
+async fn validate_melt_request_route<D>(
     auth: AuthHeader,
-    state: &MintState,
+    state: &MintState<D>,
     method: &str,
     quote_id: &QuoteId,
-) -> Result<(), cdk::Error> {
+) -> Result<(), cdk::Error>
+where
+    D: MintStore,
+{
     state
         .mint
         .verify_auth(
@@ -202,12 +221,15 @@ async fn validate_melt_request_route(
 /// For bolt11/bolt12, it handles the specific request/response types.
 /// For other methods, it passes the request data directly to the payment processor.
 #[instrument(skip_all, fields(method = ?method))]
-pub async fn post_mint_custom_quote(
+pub async fn post_mint_custom_quote<D>(
     auth: AuthHeader,
-    State(state): State<MintState>,
+    State(state): State<MintState<D>>,
     Path(method): Path<String>,
     Json(payload): Json<Value>,
-) -> Result<Response, Response> {
+) -> Result<Response, Response>
+where
+    D: MintStore,
+{
     state
         .mint
         .verify_auth(
@@ -306,11 +328,14 @@ pub async fn post_mint_custom_quote(
 
 /// Get custom payment method mint quote status
 #[instrument(skip_all, fields(method = ?method, quote_id = ?quote_id))]
-pub async fn get_check_mint_custom_quote(
+pub async fn get_check_mint_custom_quote<D>(
     auth: AuthHeader,
-    State(state): State<MintState>,
+    State(state): State<MintState<D>>,
     Path((method, quote_id)): Path<(String, QuoteId)>,
-) -> Result<Response, Response> {
+) -> Result<Response, Response>
+where
+    D: MintStore,
+{
     state
         .mint
         .verify_auth(
@@ -367,12 +392,15 @@ pub async fn get_check_mint_custom_quote(
 
 /// Batch check mint quote status (NUT-29)
 #[instrument(skip_all, fields(method = ?method))]
-pub async fn post_batch_check_mint_quote(
+pub async fn post_batch_check_mint_quote<D>(
     auth: AuthHeader,
-    State(state): State<MintState>,
+    State(state): State<MintState<D>>,
     Path(method): Path<String>,
     Json(payload): Json<BatchCheckMintQuoteRequest<QuoteId>>,
-) -> Result<Response, Response> {
+) -> Result<Response, Response>
+where
+    D: MintStore,
+{
     state
         .mint
         .verify_auth(
@@ -437,12 +465,15 @@ pub async fn post_batch_check_mint_quote(
 
 /// Request a melt quote for custom payment method
 #[instrument(skip_all, fields(method = ?method))]
-pub async fn post_melt_custom_quote(
+pub async fn post_melt_custom_quote<D>(
     auth: AuthHeader,
-    State(state): State<MintState>,
+    State(state): State<MintState<D>>,
     Path(method): Path<String>,
     Json(payload): Json<Value>,
-) -> Result<Response, Response> {
+) -> Result<Response, Response>
+where
+    D: MintStore,
+{
     state
         .mint
         .verify_auth(
@@ -524,11 +555,14 @@ pub async fn post_melt_custom_quote(
 
 /// Get custom payment method melt quote status
 #[instrument(skip_all, fields(method = ?method, quote_id = ?quote_id))]
-pub async fn get_check_melt_custom_quote(
+pub async fn get_check_melt_custom_quote<D>(
     auth: AuthHeader,
-    State(state): State<MintState>,
+    State(state): State<MintState<D>>,
     Path((method, quote_id)): Path<(String, QuoteId)>,
-) -> Result<Response, Response> {
+) -> Result<Response, Response>
+where
+    D: MintStore,
+{
     state
         .mint
         .verify_auth(
@@ -551,12 +585,15 @@ pub async fn get_check_melt_custom_quote(
     Ok(melt_quote_response_to_json(quote))
 }
 
-async fn process_melt_request(
+async fn process_melt_request<D>(
     prefer: PreferHeader,
-    state: &MintState,
+    state: &MintState<D>,
     method: &str,
     payload: &cdk::nuts::MeltRequest<QuoteId>,
-) -> Result<MeltQuoteResponse<QuoteId>, cdk::Error> {
+) -> Result<MeltQuoteResponse<QuoteId>, cdk::Error>
+where
+    D: MintStore,
+{
     // Check for async preference in either the Prefer header or the request body
     // For onchain we always want to do the async flow
     let respond_async = prefer.respond_async || payload.is_prefer_async() || method == "onchain";
@@ -580,12 +617,15 @@ async fn process_melt_request(
 
 /// Cached version of post_mint_custom for NUT-19 caching support
 #[instrument(skip_all, fields(method = ?method, quote_id = ?payload.quote))]
-pub async fn cache_post_mint_custom(
+pub async fn cache_post_mint_custom<D>(
     auth: AuthHeader,
-    state: State<MintState>,
+    state: State<MintState<D>>,
     method: Path<String>,
     payload: Json<MintRequest<QuoteId>>,
-) -> Result<Json<MintResponse>, Response> {
+) -> Result<Json<MintResponse>, Response>
+where
+    D: MintStore,
+{
     use std::ops::Deref;
 
     let State(mint_state) = state;
@@ -633,13 +673,16 @@ pub async fn cache_post_mint_custom(
 
 /// Cached version of post_melt_custom for NUT-19 caching support
 #[instrument(skip_all, fields(method = ?method))]
-pub async fn cache_post_melt_custom(
+pub async fn cache_post_melt_custom<D>(
     auth: AuthHeader,
     prefer: PreferHeader,
-    state: State<MintState>,
+    state: State<MintState<D>>,
     method: Path<String>,
     payload: Json<Value>,
-) -> Result<Response, Response> {
+) -> Result<Response, Response>
+where
+    D: MintStore,
+{
     use std::ops::Deref;
 
     let State(mint_state) = state.clone();
@@ -715,12 +758,15 @@ fn parse_melt_payload(
 
 /// Cached version of post_batch_mint for NUT-19 caching support
 #[instrument(skip_all, fields(method = ?method))]
-pub async fn cache_post_batch_mint(
+pub async fn cache_post_batch_mint<D>(
     auth: AuthHeader,
-    state: State<MintState>,
+    state: State<MintState<D>>,
     method: Path<String>,
     payload: Json<BatchMintRequest<QuoteId>>,
-) -> Result<Json<MintResponse>, Response> {
+) -> Result<Json<MintResponse>, Response>
+where
+    D: MintStore,
+{
     use std::ops::Deref;
 
     let State(mint_state) = state;
@@ -791,6 +837,8 @@ mod tests {
     use super::*;
     use crate::cache::HttpCache;
 
+    type TestDb = cdk_sqlite::mint::MintSqliteDatabase;
+
     fn create_test_request(prefer_header: Option<&str>) -> Request<()> {
         let mut req = Request::builder()
             .method("POST")
@@ -821,7 +869,7 @@ mod tests {
         req
     }
 
-    async fn create_test_state() -> MintState {
+    async fn create_test_state() -> MintState<TestDb> {
         let db = Arc::new(cdk_sqlite::mint::memory::empty().await.unwrap());
         let mut builder = MintBuilder::new(db.clone())
             .with_batch_minting(Some(10), Some(vec![KnownMethod::Bolt11.to_string()]));
@@ -861,7 +909,7 @@ mod tests {
         }
     }
 
-    async fn create_test_state_with_custom_methods(methods: &[&str]) -> MintState {
+    async fn create_test_state_with_custom_methods(methods: &[&str]) -> MintState<TestDb> {
         let db = Arc::new(cdk_sqlite::mint::memory::empty().await.unwrap());
         let mut builder = MintBuilder::new(db.clone()).with_batch_minting(
             Some(10),
@@ -913,7 +961,7 @@ mod tests {
         }
     }
 
-    async fn create_custom_quote(state: &MintState, method: &str, amount: u64) -> QuoteId {
+    async fn create_custom_quote(state: &MintState<TestDb>, method: &str, amount: u64) -> QuoteId {
         let quote = state
             .mint
             .get_mint_quote(cdk::mint::MintQuoteRequest::Custom {
@@ -932,7 +980,7 @@ mod tests {
         quote.quote().clone()
     }
 
-    async fn create_paid_bolt11_quote(state: &MintState) -> QuoteId {
+    async fn create_paid_bolt11_quote(state: &MintState<TestDb>) -> QuoteId {
         let quote: MintQuoteBolt11Response<QuoteId> = state
             .mint
             .get_mint_quote(
@@ -966,7 +1014,7 @@ mod tests {
         panic!("bolt11 quote was not paid by the fake wallet");
     }
 
-    fn outputs_for_amount(state: &MintState, amount: u64) -> Vec<BlindedMessage> {
+    fn outputs_for_amount(state: &MintState<TestDb>, amount: u64) -> Vec<BlindedMessage> {
         let keyset_id = *state
             .mint
             .get_active_keysets()

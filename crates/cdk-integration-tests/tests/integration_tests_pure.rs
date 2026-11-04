@@ -28,13 +28,13 @@ use cashu::{
     NotificationPayload, PaymentMethod, PreMintSecrets, ProofState, SecretKey, SpendingConditions,
     State, SwapRequest,
 };
-use cdk::mint::Mint;
 use cdk::nuts::nut00::ProofsMethods;
 use cdk::subscription::Params;
 use cdk::types::QuoteTTL;
 use cdk::wallet::types::{TransactionDirection, TransactionId, TransactionStatus};
 use cdk::wallet::{MintConnector, P2PKLockedProofSendMode, ReceiveOptions, SendMemo, SendOptions};
 use cdk::{Amount, StreamExt};
+use cdk_common::database::mint::prelude::*;
 use cdk_common::mint::OperationKind;
 use cdk_common::payment::{
     MintPayment, OutgoingPaymentOptions, PaymentIdentifier, PaymentQuoteResponse,
@@ -2160,7 +2160,7 @@ async fn test_batch_mint_completed_operation_integrity() {
     }
 }
 
-async fn get_keyset_id(mint: &Mint) -> Id {
+async fn get_keyset_id(mint: &TestMint) -> Id {
     let keys = mint.pubkeys().keysets.first().unwrap().clone();
     keys.verify_id()
         .expect("Keyset ID generation is successful");

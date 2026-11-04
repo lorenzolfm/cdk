@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use cdk::mint::Mint;
+use cdk_common::database::MintStore;
 use thiserror::Error;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
@@ -60,11 +61,13 @@ pub trait MintMutationGuard: Send + Sync {
 }
 
 /// CDK Mint RPC Server
-#[derive(Clone)]
 #[allow(missing_debug_implementations)]
-pub struct MintRPCServer {
+pub struct MintRPCServer<D>
+where
+    D: MintStore,
+{
     socket_addr: SocketAddr,
-    mint: Arc<Mint>,
+    mint: Arc<Mint<D>>,
     mutation_guard: Option<Arc<dyn MintMutationGuard>>,
     allow_mint_quote_payment_override: bool,
     wallet_info_provider: Option<DynWalletInfoProvider>,
@@ -72,14 +75,34 @@ pub struct MintRPCServer {
     handle: Option<Arc<JoinHandle<Result<(), Error>>>>,
 }
 
-impl MintRPCServer {
+impl<D> Clone for MintRPCServer<D>
+where
+    D: MintStore,
+{
+    fn clone(&self) -> Self {
+        Self {
+            socket_addr: self.socket_addr,
+            mint: self.mint.clone(),
+            mutation_guard: self.mutation_guard.clone(),
+            allow_mint_quote_payment_override: self.allow_mint_quote_payment_override,
+            wallet_info_provider: self.wallet_info_provider.clone(),
+            shutdown: self.shutdown.clone(),
+            handle: self.handle.clone(),
+        }
+    }
+}
+
+impl<D> MintRPCServer<D>
+where
+    D: MintStore,
+{
     /// Creates a new MintRPCServer instance
     ///
     /// # Arguments
     /// * `addr` - The address to bind to
     /// * `port` - The port to listen on
     /// * `mint` - The Mint instance to serve
-    pub fn new(addr: &str, port: u16, mint: Arc<Mint>) -> Result<Self, Error> {
+    pub fn new(addr: &str, port: u16, mint: Arc<Mint<D>>) -> Result<Self, Error> {
         Ok(Self {
             socket_addr: format!("{addr}:{port}").parse()?,
             mint,
@@ -243,7 +266,10 @@ impl MintRPCServer {
     }
 }
 
-impl Drop for MintRPCServer {
+impl<D> Drop for MintRPCServer<D>
+where
+    D: MintStore,
+{
     fn drop(&mut self) {
         tracing::debug!("Dropping mint rpc server");
         self.shutdown.notify_one();

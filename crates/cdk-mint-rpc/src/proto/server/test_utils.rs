@@ -9,6 +9,7 @@ use cdk::nuts::{CurrencyUnit, PaymentMethod};
 use cdk::types::QuoteTTL;
 use cdk_common::nut00::KnownMethod;
 use cdk_fake_wallet::FakeWallet;
+use cdk_sqlite::mint::MintSqliteDatabase;
 use tokio::sync::Notify;
 
 use super::{MintMutationGuard, MintMutationGuardError, MintRPCServer};
@@ -16,7 +17,7 @@ use super::{MintMutationGuard, MintMutationGuardError, MintRPCServer};
 /// A well-formed quote id that no test mint has issued
 pub(super) const UNKNOWN_QUOTE_ID: &str = "019820ab-cdef-7000-8000-000000000000";
 
-pub(super) async fn create_test_rpc_server() -> MintRPCServer {
+pub(super) async fn create_test_rpc_server() -> MintRPCServer<MintSqliteDatabase> {
     create_test_rpc_server_with_payment_delay(2).await
 }
 
@@ -25,7 +26,9 @@ pub(super) async fn create_test_rpc_server() -> MintRPCServer {
 ///
 /// Tests that drive quote state themselves pass a delay long enough that
 /// the backend never reports a payment of its own.
-pub(super) async fn create_test_rpc_server_with_payment_delay(payment_delay: u64) -> MintRPCServer {
+pub(super) async fn create_test_rpc_server_with_payment_delay(
+    payment_delay: u64,
+) -> MintRPCServer<MintSqliteDatabase> {
     let db = Arc::new(cdk_sqlite::mint::memory::empty().await.unwrap());
 
     let mut mint_builder = MintBuilder::new(db.clone());

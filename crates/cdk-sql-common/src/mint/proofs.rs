@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use async_trait::async_trait;
-use cdk_common::database::mint::Acquired;
 use cdk_common::database::{self, Error, MintProofsDatabase};
 use cdk_common::mint::{Operation, ProofsWithState};
 use cdk_common::nut00::ProofsMethods;
@@ -13,7 +12,7 @@ use cdk_common::secret::Secret;
 use cdk_common::util::unix_time;
 use cdk_common::{Amount, Id, Proof, Proofs, PublicKey, State};
 
-use super::{SQLMintDatabase, SQLTransaction};
+use super::{Acquired, SQLMintDatabase, SQLTransaction};
 use crate::database::DatabaseExecutor;
 use crate::pool::DatabasePool;
 use crate::stmt::{query, Column};
@@ -184,7 +183,7 @@ where
             .await?;
         }
 
-        Ok(ProofsWithState::new(proofs, State::Unspent).into())
+        Ok(Acquired::new(ProofsWithState::new(proofs, State::Unspent)))
     }
 
     /// Updates all proofs to the given state in the database.
@@ -416,7 +415,7 @@ where
         }
 
         let state = first_state.unwrap_or(State::Unspent);
-        Ok(ProofsWithState::new(proofs, state).into())
+        Ok(Acquired::new(ProofsWithState::new(proofs, state)))
     }
 }
 

@@ -12,6 +12,7 @@ use axum::routing::{get, post};
 use axum::Router;
 use cache::HttpCache;
 use cdk::mint::Mint;
+use cdk_common::database::MintStore;
 use router_handlers::*;
 
 mod metrics;
@@ -24,18 +25,38 @@ mod router_handlers;
 mod ws;
 
 /// CDK Mint State
-#[derive(Clone)]
 #[allow(missing_debug_implementations)]
-pub struct MintState {
-    mint: Arc<Mint>,
+pub struct MintState<D>
+where
+    D: MintStore,
+{
+    mint: Arc<Mint<D>>,
     cache: Arc<cache::HttpCache>,
+}
+
+impl<D> Clone for MintState<D>
+where
+    D: MintStore,
+{
+    fn clone(&self) -> Self {
+        Self {
+            mint: self.mint.clone(),
+            cache: self.cache.clone(),
+        }
+    }
 }
 
 /// Create mint [`Router`] with required endpoints for cashu mint with the default cache
 ///
 /// The `custom_methods` parameter should include all custom payment methods supported
 /// by the payment processor, including "bolt11" and "bolt12" if they are supported.
-pub async fn create_mint_router(mint: Arc<Mint>, custom_methods: Vec<String>) -> Result<Router> {
+pub async fn create_mint_router<D>(
+    mint: Arc<Mint<D>>,
+    custom_methods: Vec<String>,
+) -> Result<Router>
+where
+    D: MintStore,
+{
     create_mint_router_with_custom_cache(mint, Default::default(), custom_methods, false).await
 }
 
@@ -88,12 +109,15 @@ async fn cors_middleware(
 /// The `custom_methods` parameter should include all custom payment methods supported
 /// by the payment processor, including "bolt11" and "bolt12" if they are supported.
 #[allow(unused_mut, unused_variables)]
-pub async fn create_mint_router_with_custom_cache(
-    mint: Arc<Mint>,
+pub async fn create_mint_router_with_custom_cache<D>(
+    mint: Arc<Mint<D>>,
     cache: HttpCache,
     custom_methods: Vec<String>,
     enable_info_page: bool,
-) -> Result<Router> {
+) -> Result<Router>
+where
+    D: MintStore,
+{
     let state = MintState {
         mint,
         cache: Arc::new(cache),

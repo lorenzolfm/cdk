@@ -5,6 +5,7 @@ use std::str::FromStr;
 
 use cashu::{Amount, BlindSignature, Id, SecretKey};
 
+use crate::database::mint::prelude::*;
 use crate::database::mint::{Database, Error, KeysDatabase, QuoteId};
 use crate::database::MintSignaturesDatabase;
 

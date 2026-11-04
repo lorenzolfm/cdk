@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use cdk_common::database::mint::prelude::*;
 use cdk_common::mint::MeltQuote;
 use cdk_common::nut00::KnownMethod;
 use cdk_common::nuts::{CurrencyUnit, MeltQuoteState, Proofs};
@@ -17,8 +18,8 @@ use cdk_common::{Amount, MeltQuoteBolt11Request, PaymentMethod, ProofsMethods};
 use cdk_fake_wallet::{create_fake_invoice, FakeInvoiceDescription, FakeWallet};
 use futures::Stream;
 
-use crate::mint::{Mint, MintBuilder, MintMeltLimits};
-use crate::test_helpers::mint::mint_test_proofs;
+use crate::mint::{MintBuilder, MintMeltLimits};
+use crate::test_helpers::mint::{mint_test_proofs, TestMint as Mint};
 use crate::types::{FeeReserve, QuoteTTL};
 use crate::Error;
 
@@ -195,7 +196,7 @@ async fn create_pending_test_mint(
 async fn build_pending_test_mint<DB>(
     db: Arc<DB>,
     backend: Arc<dyn MintPayment<Err = payment::Error> + Send + Sync>,
-) -> Result<Mint, Error>
+) -> Result<crate::mint::Mint<DB>, Error>
 where
     DB: cdk_common::database::MintDatabase<cdk_common::database::Error>
         + cdk_common::database::MintKeysDatabase<Err = cdk_common::database::Error>
