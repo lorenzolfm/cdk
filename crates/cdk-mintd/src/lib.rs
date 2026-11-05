@@ -15,7 +15,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use axum::extract::DefaultBodyLimit;
 use axum::Router;
 use bip39::Mnemonic;
-use cdk::cdk_database::{self, KVStore, KVStoreCompareAndSwap, MintDatabase, MintKeysDatabase};
+use cdk::cdk_database::{self, DynMintDatabase, KVStore, KVStoreCompareAndSwap, MintKeysDatabase};
 use cdk::mint::{Mint, MintBuilder, MintMeltLimits};
 use cdk::nuts::nut00::KnownMethod;
 #[cfg(any(
@@ -33,7 +33,6 @@ use cdk::nuts::{
 };
 use cdk_axum::cache::HttpCache;
 use cdk_common::common::QuoteTTL;
-use cdk_common::database::DynMintDatabase;
 // internal crate modules
 #[cfg(feature = "prometheus")]
 use cdk_common::payment::MetricsMintPayment;
@@ -959,7 +958,7 @@ async fn setup_database(
         #[cfg(feature = "sqlite")]
         DatabaseEngine::Sqlite => {
             let db = setup_sqlite_database(_work_dir, _db_password).await?;
-            let localstore: Arc<dyn MintDatabase<cdk_database::Error> + Send + Sync> = db.clone();
+            let localstore: DynMintDatabase = db.clone();
             let kv: Arc<dyn KVStore<Err = cdk_database::Error> + Send + Sync> = db.clone();
             let configuration_store: Arc<
                 dyn KVStoreCompareAndSwap<Err = cdk_database::Error> + Send + Sync,
@@ -989,8 +988,7 @@ async fn setup_database(
             let pg_db = Arc::new(MintPgDatabase::new(db_config).await?);
             tracing::info!("PostgreSQL database connection established");
             #[cfg(feature = "postgres")]
-            let localstore: Arc<dyn MintDatabase<cdk_database::Error> + Send + Sync> =
-                pg_db.clone();
+            let localstore: DynMintDatabase = pg_db.clone();
             #[cfg(feature = "postgres")]
             let kv: Arc<dyn KVStore<Err = cdk_database::Error> + Send + Sync> = pg_db.clone();
             #[cfg(feature = "postgres")]

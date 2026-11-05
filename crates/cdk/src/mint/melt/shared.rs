@@ -6,14 +6,13 @@
 //!
 //! The functions here ensure consistency between these two code paths.
 
-use cdk_common::database::mint::Acquired;
-use cdk_common::database::{self, DynMintDatabase, DynMintTransaction};
 use cdk_common::mint::{self as mint_types};
 use cdk_common::nuts::{BlindSignature, BlindedMessage, MeltQuoteState, Proofs, State};
-use cdk_common::{Amount, CurrencyUnit, Error, PublicKey, QuoteId};
+use cdk_common::{database, Amount, CurrencyUnit, Error, PublicKey, QuoteId};
 #[cfg(feature = "prometheus")]
 use cdk_prometheus::METRICS;
 use cdk_signatory::signatory::SignatoryKeySet;
+use cdk_sql_common::mint::{Acquired, DynMintDatabase, DynMintTransaction};
 
 use super::lease::{check_melt_lease, commit_melt_completion};
 use crate::mint::subscription::PubSubManager;
@@ -398,7 +397,7 @@ async fn rollback_melt_quote_inner(
 }
 
 enum MeltCleanupTransaction {
-    Ready(Box<dyn database::MintTransaction<database::Error> + Send + Sync>),
+    Ready(cdk_sql_common::mint::DynMintTransaction),
     AlreadyCompleted,
 }
 
@@ -435,7 +434,7 @@ async fn begin_melt_cleanup_transaction(
 pub(super) enum MeltChangeResult {
     Ready {
         change_sigs: Option<Vec<BlindSignature>>,
-        tx: Box<dyn database::MintTransaction<database::Error> + Send + Sync>,
+        tx: cdk_sql_common::mint::DynMintTransaction,
     },
     AlreadyCompleted,
 }
@@ -630,7 +629,7 @@ pub(super) async fn process_melt_change(
 /// * [`Error::PendingQuote`] (code 20005) if another quote with the same lookup ID is pending.
 /// * [`Error::RequestAlreadyPaid`] (code 20006) if another quote with the same lookup ID is paid.
 pub async fn load_melt_quotes_exclusively(
-    tx: &mut Box<dyn database::MintTransaction<database::Error> + Send + Sync>,
+    tx: &mut cdk_sql_common::mint::DynMintTransaction,
     quote_id: &QuoteId,
 ) -> Result<Acquired<MeltQuote>, Error> {
     // Lock ALL related quotes in a single atomic query to prevent deadlocks.
@@ -708,7 +707,7 @@ pub async fn load_melt_quotes_exclusively(
 /// - Database operations fail
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn finalize_melt_core(
-    mut tx: Box<dyn database::MintTransaction<database::Error> + Send + Sync>,
+    mut tx: cdk_sql_common::mint::DynMintTransaction,
     pubsub: &PubSubManager,
     mut quote: Acquired<MeltQuote>,
     input_ys: &[PublicKey],

@@ -3,12 +3,13 @@
 use std::str::FromStr;
 
 use async_trait::async_trait;
-use cdk_common::database::mint::{Acquired, SagaDatabase, SagaTransaction};
+use cdk_common::database::mint::{SagaDatabase, SagaTransaction};
 use cdk_common::database::Error;
 use cdk_common::mint;
 use cdk_common::util::unix_time;
 use serde_json;
 
+use super::acquired::Acquired;
 use super::{SQLMintDatabase, SQLTransaction};
 use crate::pool::DatabasePool;
 use crate::stmt::{query, Column};
@@ -80,6 +81,7 @@ where
     RM: DatabasePool + 'static,
 {
     type Err = Error;
+    type LockedSaga = Acquired<mint::Saga>;
 
     async fn get_saga(
         &mut self,
@@ -113,7 +115,7 @@ where
         &mut self,
         operation_id: &uuid::Uuid,
     ) -> Result<Option<Acquired<mint::Saga>>, Self::Err> {
-        Ok(self.get_saga(operation_id).await?.map(Into::into))
+        Ok(self.get_saga(operation_id).await?.map(Acquired::new))
     }
 
     async fn add_saga(&mut self, saga: &mint::Saga) -> Result<(), Self::Err> {

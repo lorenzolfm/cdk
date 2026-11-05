@@ -4,8 +4,8 @@
 //! to undo all completed steps and restore the database to its pre-saga state.
 
 use async_trait::async_trait;
-use cdk_common::database::DynMintDatabase;
 use cdk_common::{Error, PublicKey, QuoteId};
+use cdk_sql_common::mint::DynMintDatabase;
 use tracing::instrument;
 use uuid::Uuid;
 

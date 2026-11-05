@@ -20,6 +20,7 @@ use crate::database::{ConnectionWithTransaction, DatabaseExecutor};
 use crate::pool::{DatabasePool, Pool, PooledResource};
 use crate::stmt::query;
 
+mod acquired;
 mod auth;
 mod completed_operations;
 mod keys;
@@ -34,6 +35,7 @@ mod migrations {
     include!(concat!(env!("OUT_DIR"), "/migrations_mint.rs"));
 }
 
+pub use acquired::{Acquired, DynMintDatabase, DynMintTransaction};
 pub use auth::SQLMintAuthDatabase;
 #[cfg(feature = "prometheus")]
 use cdk_prometheus::MintMetricGuard;
@@ -86,7 +88,7 @@ where
 
     async fn begin_transaction_from_pool(
         pool: &Arc<Pool<RM>>,
-    ) -> Result<Box<dyn database::MintTransaction<Error> + Send + Sync>, Error> {
+    ) -> Result<DynMintTransaction, Error> {
         let tx = SQLTransaction {
             inner: ConnectionWithTransaction::new(
                 pool.get().await.map_err(|e| Error::Database(Box::new(e)))?,
@@ -182,9 +184,12 @@ impl<RM> MintDatabase<Error> for SQLMintDatabase<RM>
 where
     RM: DatabasePool + 'static,
 {
-    async fn begin_transaction(
-        &self,
-    ) -> Result<Box<dyn database::MintTransaction<Error> + Send + Sync>, Error> {
+    type LockedMintQuote = Acquired<cdk_common::mint::MintQuote>;
+    type LockedMeltQuote = Acquired<cdk_common::mint::MeltQuote>;
+    type LockedProofs = Acquired<cdk_common::mint::ProofsWithState>;
+    type LockedSaga = Acquired<cdk_common::mint::Saga>;
+
+    async fn begin_transaction(&self) -> Result<DynMintTransaction, Error> {
         Self::begin_transaction_from_pool(&self.pool).await
     }
 }

@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use cdk_common::common::PaymentProcessorKey;
-use cdk_common::database::DynMintDatabase;
 use cdk_common::mint::MintQuote;
 use cdk_common::payment::DynMintPayment;
 use cdk_common::util::unix_time;
 use cdk_common::MintQuoteState;
+use cdk_sql_common::mint::DynMintDatabase;
 use tracing::instrument;
 
 use super::subscription::PubSubManager;

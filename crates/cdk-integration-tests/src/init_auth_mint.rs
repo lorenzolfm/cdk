@@ -21,7 +21,15 @@ pub async fn start_fake_mint_with_auth<D, A, K>(
     key_store: K,
 ) -> Result<()>
 where
-    D: MintDatabase<cdk_database::Error> + Send + Sync + 'static,
+    D: MintDatabase<
+            cdk_database::Error,
+            LockedMintQuote = cdk::cdk_database::Acquired<cdk_common::mint::MintQuote>,
+            LockedMeltQuote = cdk::cdk_database::Acquired<cdk_common::mint::MeltQuote>,
+            LockedProofs = cdk::cdk_database::Acquired<cdk_common::mint::ProofsWithState>,
+            LockedSaga = cdk::cdk_database::Acquired<cdk_common::mint::Saga>,
+        > + Send
+        + Sync
+        + 'static,
     A: MintAuthDatabase<Err = cdk_database::Error> + Send + Sync + 'static,
     K: MintKeysDatabase<Err = cdk_database::Error> + Send + Sync + 'static,
 {

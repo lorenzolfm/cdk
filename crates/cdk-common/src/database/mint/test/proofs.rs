@@ -9,7 +9,7 @@ use cashu::{Amount, Id, SecretKey, State};
 use tokio::sync::Barrier;
 
 use crate::database::mint::test::setup_keyset;
-use crate::database::mint::{Database, DynMintDatabase, Error, KeysDatabase, Proof, QuoteId};
+use crate::database::mint::{Database, Error, KeysDatabase, Proof, QuoteId};
 use crate::mint::Operation;
 use crate::state::check_state_transition;
 
@@ -322,7 +322,10 @@ where
 /// This test is intended for database backends with row-level locking. It is
 /// invoked explicitly by the PostgreSQL test suite rather than the generic
 /// database macro because SQLite serializes writes at the database level.
-pub async fn concurrent_multi_keyset_spends_use_consistent_lock_order(db: DynMintDatabase) {
+pub async fn concurrent_multi_keyset_spends_use_consistent_lock_order<D>(db: Arc<D>)
+where
+    D: Database<Error> + Send + Sync + 'static,
+{
     let first_keyset = Id::from_str("00916bbf7ef91a36").unwrap();
     let second_keyset = Id::from_str("00916bbf7ef91a37").unwrap();
 

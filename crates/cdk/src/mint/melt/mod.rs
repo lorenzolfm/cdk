@@ -4,7 +4,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use cdk_common::database::DynMintDatabase;
 use cdk_common::melt::MeltQuoteRequest;
 use cdk_common::mint::MeltPaymentRequest;
 use cdk_common::nut00::KnownMethod;
@@ -20,6 +19,7 @@ use cdk_common::{
     MeltOptions, MeltQuoteBolt12Request, MeltQuoteCreateResponse, MeltQuoteCustomRequest,
     MeltQuoteCustomResponse, MeltQuoteOnchainRequest, MeltQuoteOnchainResponse, MeltQuoteResponse,
 };
+use cdk_sql_common::mint::DynMintDatabase;
 use lightning::offers::offer::Offer;
 use tracing::instrument;
 

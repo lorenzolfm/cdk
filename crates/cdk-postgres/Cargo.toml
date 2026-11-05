@@ -18,7 +18,7 @@ wallet = ["cdk-common/wallet", "cdk-sql-common/wallet"]
 [dependencies]
 async-trait.workspace = true
 cdk-common.workspace = true
-cdk-sql-common = { workspace = true }
+cdk-sql-common = { workspace = true, features = ["mint", "wallet"] }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 uuid.workspace = true
 tokio-postgres = "0.7.13"

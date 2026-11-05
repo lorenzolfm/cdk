@@ -1,6 +1,6 @@
 use async_trait::async_trait;
-use cdk_common::database::DynMintDatabase;
 use cdk_common::{Error, PublicKey};
+use cdk_sql_common::mint::DynMintDatabase;
 use tracing::instrument;
 use uuid::Uuid;
 

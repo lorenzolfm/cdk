@@ -22,7 +22,7 @@ cdk-postgres = { workspace = true, optional = true }
 cdk-supabase = { workspace = true, optional = true, features = ["wallet"] }
 cdk-nostr = { workspace = true, optional = true }
 tokio-util = { workspace = true, optional = true }
-cdk-sql-common = { workspace = true }
+cdk-sql-common = { workspace = true, features = ["wallet"] }
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

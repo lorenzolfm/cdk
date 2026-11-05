@@ -1,8 +1,7 @@
-use cdk_common::database::mint::Acquired;
-use cdk_common::database::DynMintTransaction;
 use cdk_common::mint::ProofsWithState;
 use cdk_common::state::{self, check_state_transition};
 use cdk_common::{Error, State};
+use cdk_sql_common::mint::{Acquired, DynMintTransaction};
 
 use crate::Mint;
 

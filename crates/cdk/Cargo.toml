@@ -22,7 +22,7 @@ wallet = [
 nostr = ["wallet", "dep:nostr", "dep:nostr-sdk", "cdk-common/nostr"]
 npubcash = ["wallet", "nostr", "dep:cdk-nostr", "cdk-nostr/npubcash"]
 nwc = ["wallet", "nostr", "dep:cdk-nostr", "cdk-nostr/nwc"]
-mint = ["dep:futures", "cdk-common/mint", "cdk-common/http", "cdk-signatory"]
+mint = ["dep:futures", "cdk-common/mint", "cdk-common/http", "cdk-signatory", "dep:cdk-sql-common", "cdk-sql-common/mint"]
 bip353 = ["wallet", "cdk-common/bip353", "cdk-http-client?/bip353"]
 bench = []
 http_subscription = []
@@ -35,6 +35,7 @@ prometheus = ["dep:cdk-prometheus"]
 [dependencies]
 arc-swap.workspace = true
 cdk-common = { workspace = true, default-features = false }
+cdk-sql-common = { workspace = true, optional = true }
 async-trait.workspace = true
 anyhow.workspace = true
 bitcoin.workspace = true

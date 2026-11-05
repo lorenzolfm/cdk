@@ -7,8 +7,7 @@ use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use cdk_common::common::{PaymentProcessorKey, QuoteTTL};
-use cdk_common::database::mint::Acquired;
-use cdk_common::database::{self, DynMintAuthDatabase, DynMintDatabase};
+use cdk_common::database::DynMintAuthDatabase;
 use cdk_common::nuts::{BlindSignature, BlindedMessage, CurrencyUnit, Id};
 use cdk_common::payment::{DynMintPayment, WaitPaymentResponse};
 pub use cdk_common::quote_id::QuoteId;
@@ -16,6 +15,7 @@ use cdk_common::stream::{BackoffPolicy, SupervisedStream};
 #[cfg(feature = "prometheus")]
 use cdk_prometheus::MintMetricGuard;
 use cdk_signatory::signatory::{Signatory, SignatoryKeySet, SignatoryKeysets};
+use cdk_sql_common::mint::{Acquired, DynMintDatabase};
 use futures::{Stream, StreamExt};
 use nut21::ProtectedEndpoint;
 use subscription::PubSubManager;
@@ -28,6 +28,8 @@ use crate::fees::calculate_fee;
 use crate::nuts::*;
 use crate::{Amount, OidcClient};
 
+#[cfg(doctest)]
+mod acquired_doctests;
 pub(crate) mod auth;
 mod builder;
 mod check_spendable;
@@ -1201,7 +1203,7 @@ impl Mint {
     /// be published **after** the enclosing transaction commits.
     #[instrument(skip_all)]
     async fn handle_mint_quote_payment(
-        tx: &mut Box<dyn database::MintTransaction<database::Error> + Send + Sync>,
+        tx: &mut cdk_sql_common::mint::DynMintTransaction,
         mint_quote: &mut Acquired<MintQuote>,
         wait_payment_response: WaitPaymentResponse,
     ) -> Result<bool, Error> {

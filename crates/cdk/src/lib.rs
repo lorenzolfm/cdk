@@ -18,6 +18,8 @@ pub mod cdk_database {
         MintKeysDatabase, MintProofsDatabase, MintQuotesDatabase, MintSignaturesDatabase,
         MintTransaction,
     };
+    #[cfg(feature = "mint")]
+    pub use cdk_sql_common::mint::{Acquired, DynMintDatabase, DynMintTransaction};
 }
 
 #[cfg(feature = "mint")]

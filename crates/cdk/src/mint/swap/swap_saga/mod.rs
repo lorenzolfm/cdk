@@ -1,10 +1,10 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use cdk_common::database::DynMintDatabase;
 use cdk_common::mint::{Operation, Saga, SwapSagaState};
 use cdk_common::nuts::BlindedMessage;
 use cdk_common::{database, Error, Proofs, ProofsMethods, PublicKey, QuoteId, State};
+use cdk_sql_common::mint::DynMintDatabase;
 use tracing::instrument;
 
 use self::compensation::{CompensatingAction, RemoveSwapSetup};
