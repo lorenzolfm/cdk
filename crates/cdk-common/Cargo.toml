@@ -15,7 +15,7 @@ default = ["mint", "wallet"]
 test = []
 bench = []
 wallet = ["cashu/wallet", "dep:uuid"]
-mint = ["cashu/mint", "dep:uuid"]
+mint = ["cashu/mint", "dep:uuid", "dep:cdk-acquired"]
 nostr = ["wallet", "cashu/nostr"]
 prometheus = ["cdk-prometheus/default"]
 # `http` selects the default `bitreq` backend so any crate enabling HTTP support
@@ -29,6 +29,7 @@ grpc = ["dep:tonic"]
 bip353 = ["cdk-http-client?/bip353"]
 
 [dependencies]
+cdk-acquired = { workspace = true, optional = true }
 async-trait.workspace = true
 bitcoin.workspace = true
 cashu.workspace = true

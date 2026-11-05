@@ -113,7 +113,10 @@ where
         &mut self,
         operation_id: &uuid::Uuid,
     ) -> Result<Option<Acquired<mint::Saga>>, Self::Err> {
-        Ok(self.get_saga(operation_id).await?.map(Into::into))
+        Ok(self
+            .get_saga(operation_id)
+            .await?
+            .map(cdk_acquired::from_locked))
     }
 
     async fn add_saga(&mut self, saga: &mint::Saga) -> Result<(), Self::Err> {

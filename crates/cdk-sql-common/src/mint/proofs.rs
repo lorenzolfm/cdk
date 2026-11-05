@@ -184,7 +184,10 @@ where
             .await?;
         }
 
-        Ok(ProofsWithState::new(proofs, State::Unspent).into())
+        Ok(cdk_acquired::from_locked(ProofsWithState::new(
+            proofs,
+            State::Unspent,
+        )))
     }
 
     /// Updates all proofs to the given state in the database.
@@ -416,7 +419,9 @@ where
         }
 
         let state = first_state.unwrap_or(State::Unspent);
-        Ok(ProofsWithState::new(proofs, state).into())
+        Ok(cdk_acquired::from_locked(ProofsWithState::new(
+            proofs, state,
+        )))
     }
 }
 

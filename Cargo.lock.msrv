@@ -1292,6 +1292,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "cdk-acquired"
+version = "0.18.0"
+
+[[package]]
 name = "cdk-axum"
 version = "0.18.0"
 dependencies = [
@@ -1394,6 +1398,7 @@ dependencies = [
  "async-trait",
  "bitcoin",
  "cashu",
+ "cdk-acquired",
  "cdk-http-client",
  "cdk-prometheus",
  "criterion",
@@ -1833,6 +1838,7 @@ version = "0.18.0"
 dependencies = [
  "async-trait",
  "bitcoin",
+ "cdk-acquired",
  "cdk-common",
  "cdk-prometheus",
  "lightning-invoice",

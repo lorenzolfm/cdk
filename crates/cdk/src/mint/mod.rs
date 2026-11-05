@@ -28,6 +28,8 @@ use crate::fees::calculate_fee;
 use crate::nuts::*;
 use crate::{Amount, OidcClient};
 
+#[cfg(doctest)]
+mod acquired_doctests;
 pub(crate) mod auth;
 mod builder;
 mod check_spendable;

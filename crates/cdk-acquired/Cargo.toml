@@ -1,0 +1,16 @@
+[package]
+name = "cdk-acquired"
+version.workspace = true
+edition.workspace = true
+authors = ["CDK Developers"]
+description = "Marker for rows locked by the current mint database transaction"
+license.workspace = true
+homepage = "https://github.com/cashubtc/cdk"
+repository = "https://github.com/cashubtc/cdk.git"
+rust-version.workspace = true                            # MSRV
+readme = "README.md"
+
+[dependencies]
+
+[lints]
+workspace = true
