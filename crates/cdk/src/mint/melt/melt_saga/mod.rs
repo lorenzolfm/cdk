@@ -1,7 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use cdk_common::database::DynMintDatabase;
 use cdk_common::mint::{MeltFinalizationData, MeltSagaState, Operation, Saga, SagaStateEnum};
 use cdk_common::nut00::KnownMethod;
 use cdk_common::nuts::MeltQuoteState;
@@ -12,6 +11,7 @@ use cdk_common::{
 };
 #[cfg(feature = "prometheus")]
 use cdk_prometheus::MintMetricGuard;
+use cdk_sql_common::mint::DynMintDatabase;
 use tokio::sync::Mutex;
 use tracing::instrument;
 

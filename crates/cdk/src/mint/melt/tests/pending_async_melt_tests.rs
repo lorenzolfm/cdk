@@ -197,8 +197,13 @@ async fn build_pending_test_mint<DB>(
     backend: Arc<dyn MintPayment<Err = payment::Error> + Send + Sync>,
 ) -> Result<Mint, Error>
 where
-    DB: cdk_common::database::MintDatabase<cdk_common::database::Error>
-        + cdk_common::database::MintKeysDatabase<Err = cdk_common::database::Error>
+    DB: cdk_common::database::MintDatabase<
+            cdk_common::database::Error,
+            LockedMintQuote = cdk_sql_common::mint::Acquired<cdk_common::mint::MintQuote>,
+            LockedMeltQuote = cdk_sql_common::mint::Acquired<cdk_common::mint::MeltQuote>,
+            LockedProofs = cdk_sql_common::mint::Acquired<cdk_common::mint::ProofsWithState>,
+            LockedSaga = cdk_sql_common::mint::Acquired<cdk_common::mint::Saga>,
+        > + cdk_common::database::MintKeysDatabase<Err = cdk_common::database::Error>
         + Send
         + Sync
         + 'static,

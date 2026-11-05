@@ -220,7 +220,7 @@ impl fmt::Display for MyType { ... }
 - `cdk-http-client` -- HTTP/WebSocket client for wallet-to-mint communication
 
 **Storage backends**
-- `cdk-sql-common` -- shared SQL query logic (used by SQLite and Postgres)
+- `cdk-sql-common` -- shared SQL query logic (used by SQLite and Postgres). Owns `Acquired<T>` and the `DynMintDatabase` and `DynMintTransaction` aliases, which `cdk` depends on
 - `cdk-sqlite` -- SQLite storage (includes in-memory mode for testing)
 - `cdk-postgres` -- PostgreSQL storage (requires running instance)
 - `cdk-redb` -- Redb embedded storage (wallet only)
@@ -265,7 +265,7 @@ When adding, removing, or modifying methods on the `cdk` Wallet API, you **must*
 ```
 cashu  (protocol types, crypto, NUT specs)
   └─ cdk-common  (traits, errors, pub/sub)
-       ├─ cdk  (mint + wallet business logic, sagas)
+       ├─ cdk  (mint + wallet business logic, sagas; pinned to cdk-sql-common's locked rows)
        │    ├─ cdk-axum  (HTTP server)
        │    ├─ cdk-signatory  (signing)
        │    ├─ cdk-payment-processor

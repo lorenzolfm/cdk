@@ -5,7 +5,6 @@ use std::ops::Deref;
 use std::sync::{Arc, Weak};
 
 use cdk_common::common::PaymentProcessorKey;
-use cdk_common::database::DynMintDatabase;
 use cdk_common::mint::{MeltQuote, MintQuote};
 use cdk_common::nut17::NotificationId;
 use cdk_common::payment::DynMintPayment;
@@ -17,6 +16,7 @@ use cdk_common::{
     MintQuoteBolt12Response, MintQuoteCustomResponse, MintQuoteOnchainResponse, MintQuoteState,
     NotificationPayload, ProofState, PublicKey, QuoteId,
 };
+use cdk_sql_common::mint::DynMintDatabase;
 
 use super::Mint;
 use crate::event::MintEvent;
@@ -420,7 +420,6 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
-    use cdk_common::database::DynMintDatabase;
     use cdk_common::mint::MintQuote;
     use cdk_common::payment::{
         self, CreateIncomingPaymentResponse, Event, IncomingPaymentOptions, MakePaymentResponse,
@@ -429,6 +428,7 @@ mod tests {
     };
     use cdk_common::subscription::Params;
     use cdk_common::QuoteId;
+    use cdk_sql_common::mint::DynMintDatabase;
     use futures::Stream;
     use tokio::sync::Notify;
     use tokio::time::timeout;

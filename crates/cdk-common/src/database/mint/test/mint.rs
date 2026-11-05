@@ -10,7 +10,7 @@ use cashu::nut00::KnownMethod;
 use cashu::quote_id::QuoteId;
 use cashu::{Amount, BlindSignature, CurrencyUnit, Id, SecretKey};
 
-use crate::database::mint::{Database, DynMintDatabase, Error, KeysDatabase};
+use crate::database::mint::{Database, Error, KeysDatabase};
 use crate::database::MintSignaturesDatabase;
 use crate::mint::{MeltPaymentRequest, MeltQuote, MintQuote, Operation};
 use crate::payment::PaymentIdentifier;
@@ -825,10 +825,11 @@ where
 /// `second_insert_waiting` must resolve only once the second request is
 /// blocked on the first transaction's uncommitted reservation, so the first
 /// transaction commits while the second one is waiting.
-pub async fn concurrent_reservation_of_output_reports_pending<F>(
-    db: DynMintDatabase,
+pub async fn concurrent_reservation_of_output_reports_pending<D, F>(
+    db: Arc<D>,
     second_insert_waiting: F,
 ) where
+    D: Database<Error> + Send + Sync + 'static,
     F: std::future::Future<Output = ()>,
 {
     let blinded_messages = vec![cashu::BlindedMessage {
@@ -2272,7 +2273,10 @@ where
 ///
 /// This test is invoked explicitly by the PostgreSQL suite because SQLite does
 /// not provide row-level `FOR UPDATE` locking.
-pub async fn concurrent_mint_quote_batches_use_consistent_lock_order(db: DynMintDatabase) {
+pub async fn concurrent_mint_quote_batches_use_consistent_lock_order<D>(db: Arc<D>)
+where
+    D: Database<Error> + Send + Sync + 'static,
+{
     let quote1 = MintQuote::new(
         None,
         unique_string(),

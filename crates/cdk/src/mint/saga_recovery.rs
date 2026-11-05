@@ -45,7 +45,7 @@ pub(crate) async fn process_melt_saga_outcome(
     saga: &Saga,
     quote: &mut MeltQuote,
     payment_response: &MakePaymentResponse,
-    db: &cdk_common::database::DynMintDatabase,
+    db: &cdk_sql_common::mint::DynMintDatabase,
     pubsub: &PubSubManager,
     mint: &Mint,
 ) -> Result<(), Error> {
@@ -70,7 +70,7 @@ pub(crate) async fn process_melt_saga_outcome_with_lease(
     saga: &Saga,
     quote: &mut MeltQuote,
     payment_response: &MakePaymentResponse,
-    db: &cdk_common::database::DynMintDatabase,
+    db: &cdk_sql_common::mint::DynMintDatabase,
     pubsub: &PubSubManager,
     mint: &Mint,
 ) -> Result<(), Error> {
@@ -140,7 +140,7 @@ pub(crate) async fn process_melt_saga_failure_event(
     saga: &Saga,
     quote: &mut MeltQuote,
     payment_response: &MakePaymentResponse,
-    db: &cdk_common::database::DynMintDatabase,
+    db: &cdk_sql_common::mint::DynMintDatabase,
     pubsub: &PubSubManager,
     mint: &Mint,
 ) -> Result<(), Error> {
@@ -151,7 +151,7 @@ async fn persist_pending_after_dispatch(
     stale_saga: &Saga,
     quote: &mut MeltQuote,
     payment_response: &MakePaymentResponse,
-    db: &cdk_common::database::DynMintDatabase,
+    db: &cdk_sql_common::mint::DynMintDatabase,
 ) -> Result<(), Error> {
     persist_payment_lookup_id(stale_saga, quote, payment_response, db).await
 }
@@ -159,7 +159,7 @@ async fn persist_pending_after_dispatch(
 async fn persist_permanent_payment_failure(
     stale_saga: &Saga,
     quote: &mut MeltQuote,
-    db: &cdk_common::database::DynMintDatabase,
+    db: &cdk_sql_common::mint::DynMintDatabase,
     payment_response: &MakePaymentResponse,
 ) -> Result<(), Error> {
     let mut tx = db.begin_transaction().await?;
@@ -218,7 +218,7 @@ async fn persist_permanent_payment_failure(
 pub(crate) async fn recover_recorded_payment_failure_with_lease(
     stale_saga: &Saga,
     quote: &mut MeltQuote,
-    db: &cdk_common::database::DynMintDatabase,
+    db: &cdk_sql_common::mint::DynMintDatabase,
     pubsub: &PubSubManager,
 ) -> Result<(), Error> {
     let current_saga = db.get_melt_saga_by_quote_id(&quote.id).await?;
@@ -283,7 +283,7 @@ async fn persist_payment_lookup_id(
     saga: &Saga,
     quote: &mut MeltQuote,
     payment_response: &MakePaymentResponse,
-    db: &cdk_common::database::DynMintDatabase,
+    db: &cdk_sql_common::mint::DynMintDatabase,
 ) -> Result<(), Error> {
     let mut tx = db.begin_transaction().await?;
     persist_payment_lookup_id_in_transaction(&mut tx, saga, quote, payment_response).await?;
@@ -292,7 +292,7 @@ async fn persist_payment_lookup_id(
 }
 
 async fn persist_payment_lookup_id_in_transaction(
-    tx: &mut cdk_common::database::DynMintTransaction,
+    tx: &mut cdk_sql_common::mint::DynMintTransaction,
     saga: &Saga,
     quote: &mut MeltQuote,
     payment_response: &MakePaymentResponse,
@@ -340,7 +340,7 @@ async fn finalize_paid_melt_outcome(
     saga: &Saga,
     quote: &mut MeltQuote,
     payment_response: &MakePaymentResponse,
-    db: &cdk_common::database::DynMintDatabase,
+    db: &cdk_sql_common::mint::DynMintDatabase,
     pubsub: &PubSubManager,
     mint: &Mint,
 ) -> Result<(), Error> {

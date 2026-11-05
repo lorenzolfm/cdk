@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use cdk_common::database::mint::Acquired;
 use cdk_common::mint::{MintQuote, Operation};
 use cdk_common::payment::{
     Bolt11IncomingPaymentOptions, Bolt12IncomingPaymentOptions, CustomIncomingPaymentOptions,
@@ -9,10 +8,11 @@ use cdk_common::payment::{
 use cdk_common::quote_id::QuoteId;
 use cdk_common::util::unix_time;
 use cdk_common::{
-    database, ensure_cdk, Amount, BatchMintRequest, BlindedMessage, CurrencyUnit, Error,
+    ensure_cdk, Amount, BatchMintRequest, BlindedMessage, CurrencyUnit, Error,
     MintQuoteBolt11Response, MintQuoteBolt12Response, MintQuoteOnchainResponse, MintQuoteState,
     MintRequest, MintResponse, NotificationPayload, PaymentMethod, PublicKey,
 };
+use cdk_sql_common::mint::Acquired;
 use tracing::instrument;
 
 use crate::mint::verification::{validate_custom_payment_method, MAX_REQUEST_FIELD_LEN};
@@ -533,7 +533,7 @@ impl Mint {
     #[instrument(skip_all)]
     pub async fn pay_mint_quote(
         &self,
-        tx: &mut Box<dyn database::MintTransaction<database::Error> + Send + Sync>,
+        tx: &mut cdk_sql_common::mint::DynMintTransaction,
         mint_quote: &mut Acquired<MintQuote>,
         wait_payment_response: WaitPaymentResponse,
     ) -> Result<bool, Error> {

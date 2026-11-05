@@ -6,11 +6,11 @@
 use std::str::FromStr;
 use std::time::Duration;
 
-use cdk_common::database::DynMintTransaction;
 use cdk_common::mint::{MeltPaymentRequest, OperationKind, Saga};
 use cdk_common::payment::PaymentIdentifier;
 use cdk_common::util::unix_time;
 use cdk_common::{PublicKey, QuoteId, State};
+use cdk_sql_common::mint::DynMintTransaction;
 
 use super::{Error, Mint};
 use crate::mint::melt::lease::MeltLease;

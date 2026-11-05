@@ -4,9 +4,9 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use cdk_common::database::{DynMintDatabase, DynMintTransaction};
 use cdk_common::mint::MeltQuote;
 use cdk_common::{Error, QuoteId};
+use cdk_sql_common::mint::{DynMintDatabase, DynMintTransaction};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;

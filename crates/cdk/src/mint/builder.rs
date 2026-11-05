@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use bitcoin::bip32::DerivationPath;
-use cdk_common::database::{DynMintAuthDatabase, DynMintDatabase, MintKeysDatabase};
+use cdk_common::database::{DynMintAuthDatabase, MintKeysDatabase};
 use cdk_common::error::Error;
 use cdk_common::nut00::KnownMethod;
 use cdk_common::nut04::MintMethodOptions;
@@ -12,6 +12,7 @@ use cdk_common::nut05::MeltMethodOptions;
 use cdk_common::payment::DynMintPayment;
 use cdk_common::{nut21, nut22};
 use cdk_signatory::signatory::{RotateKeyArguments, Signatory};
+use cdk_sql_common::mint::DynMintDatabase;
 
 use super::nut17::SupportedMethods;
 use super::nut19::{self, CachedEndpoint};
