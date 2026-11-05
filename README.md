@@ -42,6 +42,7 @@ The project is split up into several crates in the `crates/` directory:
     * [**cdk-bdk**](./crates/cdk-bdk/): Onchain Bitcoin backend using BDK.
     * [**cdk-fake-wallet**](./crates/cdk-fake-wallet/): Fake payment backend for mint. To be used only for testing, quotes are automatically filled.
     * [**cdk-common**](./crates/cdk-common/): Common utilities and shared code.
+    * [**cdk-acquired**](./crates/cdk-acquired/): Marker for rows locked by the current mint database transaction.
     * [**cdk-sql-common**](./crates/cdk-sql-common/): Common SQL utilities for storage backends.
     * [**cdk-signatory**](./crates/cdk-signatory/): Signing utilities and cryptographic operations.
     * [**cdk-payment-processor**](./crates/cdk-payment-processor/): Payment processing functionality; LNbits integrations should use an external payment processor.

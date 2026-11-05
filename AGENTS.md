@@ -1,7 +1,7 @@
 # AGENTS.md - Cashu Development Kit (CDK)
 
 Rust workspace (edition 2021) implementing the Cashu e-cash protocol.
-25 crates in `crates/`, stable Rust (see `rust-toolchain.toml`), MSRV 1.85.0.
+26 crates in `crates/`, stable Rust (see `rust-toolchain.toml`), MSRV 1.85.0.
 
 ## Security fixes
 
@@ -209,11 +209,12 @@ impl fmt::Display for MyType { ... }
 
 ## Project Structure
 
-24 workspace crates in `crates/`, grouped by role:
+25 workspace crates in `crates/`, grouped by role:
 
 **Foundation**
 - `cashu` -- core Cashu protocol types, crypto, NUT specs (`nuts/nut00`–`nut27`)
 - `cdk-common` -- shared traits (`MintDatabase`, `WalletDatabase`, `MintPayment`), error types, pub/sub
+- `cdk-acquired` -- `Acquired<T>`, the marker for rows locked by the current mint transaction. Only mint storage crates may depend on it directly, so nothing else can reach its constructor
 
 **Core SDK**
 - `cdk` -- main library: mint logic (`src/mint/`), wallet logic (`src/wallet/`), feature-gated (`mint`, `wallet`)

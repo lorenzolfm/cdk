@@ -53,6 +53,7 @@ bip39 = { version = "2.0", features = ["rand"] }
 jsonwebtoken = { version = "10.3", features = ["rust_crypto"] }
 cashu = { path = "./crates/cashu", default-features = false, version = "=0.18.0" }
 cdk = { path = "./crates/cdk", default-features = false, version = "=0.18.0" }
+cdk-acquired = { path = "./crates/cdk-acquired", version = "=0.18.0" }
 cdk-common = { path = "./crates/cdk-common", default-features = false, version = "=0.18.0" }
 cdk-axum = { path = "./crates/cdk-axum", default-features = false, version = "=0.18.0" }
 cdk-cln = { path = "./crates/cdk-cln", version = "=0.18.0" }

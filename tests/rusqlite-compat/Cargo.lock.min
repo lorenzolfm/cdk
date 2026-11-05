@@ -255,6 +255,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "cdk-acquired"
+version = "0.18.0"
+
+[[package]]
 name = "cdk-common"
 version = "0.18.0"
 dependencies = [
@@ -262,6 +266,7 @@ dependencies = [
  "async-trait",
  "bitcoin",
  "cashu",
+ "cdk-acquired",
  "futures",
  "getrandom 0.4.3",
  "gloo-timers",
@@ -301,6 +306,7 @@ version = "0.18.0"
 dependencies = [
  "async-trait",
  "bitcoin",
+ "cdk-acquired",
  "cdk-common",
  "lightning-invoice",
  "serde_json",

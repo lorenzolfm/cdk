@@ -832,6 +832,7 @@ release *ARGS:
     "-p cashu"
     "-p cdk-prometheus"
     "-p cdk-http-client"
+    "-p cdk-acquired"
     "-p cdk-common"
     "-p cdk-nostr"
     "-p cdk-sql-common"
@@ -872,6 +873,7 @@ check-docs:
   set -euo pipefail
   args=(
     "-p cashu"
+    "-p cdk-acquired"
     "-p cdk-common"
     "-p cdk-http-client"
     "-p cdk-nostr"
@@ -906,6 +908,7 @@ docs-strict:
   set -euo pipefail
   args=(
     "-p cashu"
+    "-p cdk-acquired"
     "-p cdk-common"
     "-p cdk-http-client"
     "-p cdk-nostr"

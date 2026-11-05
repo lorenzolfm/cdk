@@ -587,6 +587,7 @@
               export RUSTDOCFLAGS="-D warnings"
               cargo doc --no-deps \
                 -p cashu \
+                -p cdk-acquired \
                 -p cdk-common \
                 -p cdk-sql-common \
                 -p cdk \
@@ -845,6 +846,7 @@
           ];
 
           "storage-and-cli" = [
+            "-p cdk-acquired"
             "-p cdk-sql-common"
             "-p cdk-sql-common --no-default-features --features wallet"
             "-p cdk-sql-common --no-default-features --features mint"

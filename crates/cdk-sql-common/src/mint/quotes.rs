@@ -494,8 +494,11 @@ where
     let target_quote = all_quotes.iter().find(|q| &q.id == quote_id).cloned();
 
     Ok(LockedMeltQuotes {
-        target: target_quote.map(|q| q.into()),
-        all_related: all_quotes.into_iter().map(|q| q.into()).collect(),
+        target: target_quote.map(cdk_acquired::from_locked),
+        all_related: all_quotes
+            .into_iter()
+            .map(cdk_acquired::from_locked)
+            .collect(),
     })
 }
 
@@ -1086,7 +1089,7 @@ where
         .execute(&self.inner)
         .await?;
 
-        Ok(quote.into())
+        Ok(cdk_acquired::from_locked(quote))
     }
 
     async fn add_melt_quote(&mut self, quote: mint::MeltQuote) -> Result<(), Self::Err> {
@@ -1355,7 +1358,7 @@ where
     ) -> Result<Option<Acquired<MintQuote>>, Self::Err> {
         get_mint_quote_inner(&self.inner, quote_id, true)
             .await
-            .map(|quote| quote.map(|inner| inner.into()))
+            .map(|quote| quote.map(cdk_acquired::from_locked))
     }
 
     async fn get_mint_quotes_by_ids(
@@ -1367,7 +1370,7 @@ where
             .map(|quotes| {
                 quotes
                     .into_iter()
-                    .map(|quote| quote.map(|inner| inner.into()))
+                    .map(|quote| quote.map(cdk_acquired::from_locked))
                     .collect()
             })
     }
@@ -1378,7 +1381,7 @@ where
     ) -> Result<Option<Acquired<mint::MeltQuote>>, Self::Err> {
         get_melt_quote_inner(&self.inner, quote_id, true)
             .await
-            .map(|quote| quote.map(|inner| inner.into()))
+            .map(|quote| quote.map(cdk_acquired::from_locked))
     }
 
     async fn get_melt_quotes_by_request_lookup_id(
@@ -1387,7 +1390,7 @@ where
     ) -> Result<Vec<Acquired<mint::MeltQuote>>, Self::Err> {
         get_melt_quotes_by_request_lookup_id_inner(&self.inner, request_lookup_id, true)
             .await
-            .map(|quote| quote.into_iter().map(|inner| inner.into()).collect())
+            .map(|quote| quote.into_iter().map(cdk_acquired::from_locked).collect())
     }
 
     async fn lock_melt_quote_and_related(
@@ -1403,7 +1406,7 @@ where
     ) -> Result<Option<Acquired<MintQuote>>, Self::Err> {
         get_mint_quote_by_request_inner(&self.inner, request, true)
             .await
-            .map(|quote| quote.map(|inner| inner.into()))
+            .map(|quote| quote.map(cdk_acquired::from_locked))
     }
 
     async fn get_mint_quote_by_request_lookup_id(
@@ -1412,7 +1415,7 @@ where
     ) -> Result<Option<Acquired<MintQuote>>, Self::Err> {
         get_mint_quote_by_request_lookup_id_inner(&self.inner, request_lookup_id, true)
             .await
-            .map(|quote| quote.map(|inner| inner.into()))
+            .map(|quote| quote.map(cdk_acquired::from_locked))
     }
 }
 
