@@ -10,9 +10,13 @@ use rusqlite::{ffi, Connection};
 
 use crate::async_sqlite;
 
+/// The path SQLite reserves for an in-memory database.
+const IN_MEMORY_PATH: &str = ":memory:";
+
 /// The config need to create a new SQLite connection
 pub struct Config {
-    path: Option<String>,
+    /// Database file, or `None` for an in-memory database.
+    path: Option<PathBuf>,
     password: Option<String>,
     /// Set once the in-memory database has been opened. It lives only inside its
     /// single connection, so a second open means that connection was discarded.
@@ -25,6 +29,18 @@ impl Clone for Config {
             path: self.path.clone(),
             password: self.password.clone(),
             // A cloned config describes a new pool with its own database.
+            in_memory_opened: AtomicBool::new(false),
+        }
+    }
+}
+
+impl Config {
+    /// Only the exact path `:memory:` selects an in-memory database; any other
+    /// path, including one that is not valid UTF-8, is opened as a file.
+    fn new(path: PathBuf, password: Option<String>) -> Self {
+        Self {
+            path: (path.as_os_str() != IN_MEMORY_PATH).then_some(path),
+            password,
             in_memory_opened: AtomicBool::new(false),
         }
     }
@@ -86,11 +102,10 @@ impl DatabasePool for SqliteConnectionManager {
 
         let conn = if let Some(path) = config.path.as_ref() {
             // Check if parent directory exists before attempting to open database
-            let path_buf = PathBuf::from(path);
-            if let Some(parent) = path_buf.parent() {
-                if !parent.to_str().unwrap_or_default().is_empty() && !parent.exists() {
+            if let Some(parent) = path.parent() {
+                if !parent.as_os_str().is_empty() && !parent.exists() {
                     return Err(pool::Error::Resource(rusqlite::Error::InvalidPath(
-                        path_buf.clone(),
+                        path.clone(),
                     )));
                 }
             }
@@ -126,55 +141,31 @@ impl DatabasePool for SqliteConnectionManager {
 
 impl From<PathBuf> for Config {
     fn from(path: PathBuf) -> Self {
-        path.to_str().unwrap_or_default().into()
+        Self::new(path, None)
     }
 }
 
 impl From<(PathBuf, String)> for Config {
     fn from((path, password): (PathBuf, String)) -> Self {
-        (path.to_str().unwrap_or_default(), password.as_str()).into()
+        Self::new(path, Some(password))
     }
 }
 
 impl From<&PathBuf> for Config {
     fn from(path: &PathBuf) -> Self {
-        path.to_str().unwrap_or_default().into()
+        Self::new(path.clone(), None)
     }
 }
 
 impl From<&str> for Config {
     fn from(path: &str) -> Self {
-        if path.contains(":memory:") {
-            Config {
-                path: None,
-                password: None,
-                in_memory_opened: Default::default(),
-            }
-        } else {
-            Config {
-                path: Some(path.to_owned()),
-                password: None,
-                in_memory_opened: Default::default(),
-            }
-        }
+        Self::new(PathBuf::from(path), None)
     }
 }
 
 impl From<(&str, &str)> for Config {
     fn from((path, pass): (&str, &str)) -> Self {
-        if path.contains(":memory:") {
-            Config {
-                path: None,
-                password: Some(pass.to_owned()),
-                in_memory_opened: Default::default(),
-            }
-        } else {
-            Config {
-                path: Some(path.to_owned()),
-                password: Some(pass.to_owned()),
-                in_memory_opened: Default::default(),
-            }
-        }
+        Self::new(PathBuf::from(path), Some(pass.to_owned()))
     }
 }
 

@@ -412,4 +412,62 @@ mod tests {
         // Verify that fully paid and issued quote is not returned
         assert!(!quote_ids.contains(&"quote_fully_paid"));
     }
+
+    /// Opens the wallet database at `path`, records a mint, closes it, then
+    /// reopens the same path and returns whether the mint is still there.
+    #[cfg(unix)]
+    async fn mint_survives_reopen(path: std::path::PathBuf) -> bool {
+        use cdk_common::mint_url::MintUrl;
+        use cdk_common::MintInfo;
+
+        let mint_url = MintUrl::from_str("https://mint.xyz").unwrap();
+
+        #[cfg(feature = "sqlcipher")]
+        let open = || WalletSqliteDatabase::new((path.clone(), "password".to_string()));
+        #[cfg(not(feature = "sqlcipher"))]
+        let open = || WalletSqliteDatabase::new(path.clone());
+
+        let db = open().await.unwrap();
+        db.add_mint(mint_url.clone(), Some(MintInfo::new().description("test")))
+            .await
+            .unwrap();
+        drop(db);
+
+        let db = open().await.unwrap();
+        db.get_mint(mint_url).await.unwrap().is_some()
+    }
+
+    #[cfg(unix)]
+    fn unique_test_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("cdk-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn non_utf8_path_persists_across_reopen() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let dir = unique_test_dir();
+        let path = dir.join(OsStr::from_bytes(b"wallet-\xff.sqlite"));
+
+        assert!(mint_survives_reopen(path.clone()).await);
+        assert!(path.exists());
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn path_containing_memory_marker_persists_across_reopen() {
+        let dir = unique_test_dir();
+        let path = dir.join("wallet:memory:.sqlite");
+
+        assert!(mint_survives_reopen(path.clone()).await);
+        assert!(path.exists());
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
