@@ -217,6 +217,29 @@ mod tests {
         assert!(matches!(result, Err(Error::EmptyInClause(_))));
     }
 
+    /// SQLite opens an empty path as a private temporary database on every
+    /// pooled connection, so writes would be silently lost. Opening must fail.
+    #[tokio::test]
+    async fn empty_path_is_rejected() {
+        use cdk_common::database::Error;
+        use cdk_sql_common::pool;
+
+        #[cfg(feature = "sqlcipher")]
+        let result = WalletSqliteDatabase::new(("", "password")).await;
+
+        #[cfg(not(feature = "sqlcipher"))]
+        let result = WalletSqliteDatabase::new("").await;
+
+        let Err(Error::Database(error)) = result else {
+            panic!("opening an empty path must fail with a database error");
+        };
+        assert!(matches!(
+            error.downcast_ref::<pool::Error<rusqlite::Error>>(),
+            Some(pool::Error::Resource(rusqlite::Error::InvalidPath(path)))
+                if path.as_os_str().is_empty()
+        ));
+    }
+
     #[tokio::test]
     async fn test_get_proofs_by_ys() {
         use cdk_common::mint_url::MintUrl;

@@ -1,5 +1,5 @@
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -85,6 +85,13 @@ impl DatabasePool for SqliteConnectionManager {
         }
 
         let conn = if let Some(path) = config.path.as_ref() {
+            // SQLite opens an empty path as a private temporary database on each
+            // connection, so writes would be silently lost.
+            if Path::new(path).as_os_str().is_empty() {
+                return Err(pool::Error::Resource(rusqlite::Error::InvalidPath(
+                    PathBuf::from(path),
+                )));
+            }
             // Check if parent directory exists before attempting to open database
             let path_buf = PathBuf::from(path);
             if let Some(parent) = path_buf.parent() {
