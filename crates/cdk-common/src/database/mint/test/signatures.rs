@@ -191,53 +191,48 @@ pub async fn get_total_issued<DB>(db: DB)
 where
     DB: Database<Error> + KeysDatabase<Err = Error> + MintSignaturesDatabase<Err = Error>,
 {
-    let keyset_id = Id::from_str("001711afb1de20cb").unwrap();
+    let first_keyset = Id::from_str("001711afb1de20cb").unwrap();
+    let second_keyset = Id::from_str("001711afb1de20cc").unwrap();
 
-    // Create multiple signatures
-    let blinded_message1 = SecretKey::generate().public_key();
-    let blinded_message2 = SecretKey::generate().public_key();
-    let blinded_message3 = SecretKey::generate().public_key();
-
-    let sig1 = BlindSignature {
-        amount: Amount::from(100u64),
+    let signature = |amount: u64, keyset_id| BlindSignature {
+        amount: Amount::from(amount),
         keyset_id,
         c: SecretKey::generate().public_key(),
         dleq: None,
     };
 
-    let sig2 = BlindSignature {
-        amount: Amount::from(200u64),
-        keyset_id,
-        c: SecretKey::generate().public_key(),
-        dleq: None,
-    };
+    assert!(db.get_total_issued().await.unwrap().is_empty());
 
-    let sig3 = BlindSignature {
-        amount: Amount::from(300u64),
-        keyset_id,
-        c: SecretKey::generate().public_key(),
-        dleq: None,
-    };
-
-    // Add signatures
+    // One call that signs for both keysets, then another one for the first.
     let mut tx = Database::begin_transaction(&db).await.unwrap();
-    tx.add_blind_signatures(&[blinded_message1], &[sig1], None)
-        .await
-        .unwrap();
-    tx.add_blind_signatures(&[blinded_message2], &[sig2], None)
-        .await
-        .unwrap();
-    tx.add_blind_signatures(&[blinded_message3], &[sig3], None)
-        .await
-        .unwrap();
+    tx.add_blind_signatures(
+        &[
+            SecretKey::generate().public_key(),
+            SecretKey::generate().public_key(),
+            SecretKey::generate().public_key(),
+        ],
+        &[
+            signature(100, first_keyset),
+            signature(200, second_keyset),
+            signature(300, first_keyset),
+        ],
+        None,
+    )
+    .await
+    .unwrap();
+    tx.add_blind_signatures(
+        &[SecretKey::generate().public_key()],
+        &[signature(400, first_keyset)],
+        None,
+    )
+    .await
+    .unwrap();
     tx.commit().await.unwrap();
 
-    // Get total issued
     let totals = db.get_total_issued().await.unwrap();
-    let total = totals.get(&keyset_id).copied().unwrap_or(Amount::ZERO);
-
-    // Should be 600 (100 + 200 + 300)
-    assert!(total >= Amount::from(600));
+    assert_eq!(totals.len(), 2);
+    assert_eq!(totals.get(&first_keyset), Some(&Amount::from(800)));
+    assert_eq!(totals.get(&second_keyset), Some(&Amount::from(200)));
 }
 
 /// Test retrieving non-existent blind signatures

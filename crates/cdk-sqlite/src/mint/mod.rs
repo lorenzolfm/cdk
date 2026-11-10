@@ -197,4 +197,70 @@ mod test {
 
         let _ = remove_file(&file);
     }
+
+    #[tokio::test]
+    async fn keyset_ledger_migration_carries_over_keyset_amounts() {
+        use cdk_common::database::{MintProofsDatabase, MintSignaturesDatabase};
+        use cdk_common::Amount;
+
+        let path = std::env::temp_dir().join(format!(
+            "cdk-keyset-ledger-migration-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let file = path.to_str().expect("utf-8 temp path");
+        #[cfg(not(feature = "sqlcipher"))]
+        let open = || MintSqliteDatabase::new(file);
+        #[cfg(feature = "sqlcipher")]
+        let open = || MintSqliteDatabase::new((file, "test"));
+
+        drop(open().await.expect("migrated database"));
+
+        // Roll the schema back to before the ledger migration and store totals
+        // the way the counter table held them.
+        {
+            #[cfg(not(feature = "sqlcipher"))]
+            let config: Config = file.into();
+            #[cfg(feature = "sqlcipher")]
+            let config: Config = (file, "test").into();
+            let pool = Pool::<SqliteConnectionManager>::new(config);
+            let conn = pool.get().await.expect("valid connection");
+            query(
+                r#"
+                DROP TABLE keyset_ledger;
+                CREATE TABLE keyset_amounts (
+                    keyset_id TEXT PRIMARY KEY NOT NULL,
+                    total_issued INTEGER NOT NULL DEFAULT 0,
+                    total_redeemed INTEGER NOT NULL DEFAULT 0,
+                    fee_collected INTEGER NOT NULL DEFAULT 0
+                );
+                INSERT INTO keyset_amounts (keyset_id, total_issued, total_redeemed, fee_collected)
+                VALUES
+                    ('00916bbf7ef91a36', 1000, 600, 3),
+                    ('00916bbf7ef91a37', 50, 0, 0),
+                    ('00916bbf7ef91a38', 0, 0, 0);
+                DELETE FROM migrations
+                WHERE name = '20261110000000_replace_keyset_amounts_with_ledger.sql';
+                "#,
+            )
+            .expect("query")
+            .batch(&*conn)
+            .await
+            .expect("restore counter table");
+        }
+
+        let db = open().await.expect("reapply ledger migration");
+
+        let first = Id::from_str("00916bbf7ef91a36").expect("valid keyset id");
+        let second = Id::from_str("00916bbf7ef91a37").expect("valid keyset id");
+        let issued = db.get_total_issued().await.expect("total issued");
+        let redeemed = db.get_total_redeemed().await.expect("total redeemed");
+        assert_eq!(
+            issued,
+            [(first, Amount::from(1000)), (second, Amount::from(50))].into()
+        );
+        assert_eq!(redeemed, [(first, Amount::from(600))].into());
+
+        drop(db);
+        remove_file(path).expect("remove database");
+    }
 }

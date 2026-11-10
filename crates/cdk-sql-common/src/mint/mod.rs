@@ -23,6 +23,7 @@ use crate::stmt::query;
 mod auth;
 mod completed_operations;
 mod keys;
+mod keyset_ledger;
 mod keyvalue;
 mod proofs;
 mod quotes;
