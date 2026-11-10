@@ -527,12 +527,12 @@ mod test {
     }
 
     #[tokio::test]
-    async fn concurrent_multi_keyset_spends_use_consistent_lock_order() {
+    async fn concurrent_operations_on_same_keyset_do_not_block() {
         let test_id = format!(
-            "test_concurrent_multi_keyset_spends_{}",
+            "test_concurrent_same_keyset_operations_{}",
             uuid::Uuid::new_v4()
         );
-        cdk_common::database::mint::test::concurrent_multi_keyset_spends_use_consistent_lock_order(
+        cdk_common::database::mint::test::concurrent_operations_on_same_keyset_do_not_block(
             Arc::new(provide_mint_db(test_id).await),
         )
         .await;

@@ -1,15 +1,16 @@
 //! Proofs tests
 
+use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::Arc;
 use std::time::Duration;
 
 use cashu::secret::Secret;
-use cashu::{Amount, Id, SecretKey, State};
-use tokio::sync::Barrier;
+use cashu::{Amount, BlindSignature, Id, SecretKey, State};
 
 use crate::database::mint::test::setup_keyset;
-use crate::database::mint::{Database, DynMintDatabase, Error, KeysDatabase, Proof, QuoteId};
+use crate::database::mint::{
+    Database, DynMintDatabase, Error, KeysDatabase, Proof, QuoteId, Transaction,
+};
 use crate::mint::Operation;
 use crate::state::check_state_transition;
 
@@ -426,16 +427,41 @@ where
     tx.commit().await.unwrap();
 }
 
-/// Test concurrent spends across the same keysets use a consistent lock order.
+/// Record a spend, an issuance and a fee on `keyset_id` in `tx` without committing.
+async fn record_swap_on_keyset(
+    tx: &mut (dyn Transaction<Error> + Send + Sync),
+    ys: &[cashu::PublicKey],
+    keyset_id: Id,
+) -> Result<(), Error> {
+    let mut proofs = tx.get_proofs(ys).await?;
+    tx.update_proofs_state(&mut proofs, State::Spent).await?;
+    tx.add_blind_signatures(
+        &[SecretKey::generate().public_key()],
+        &[BlindSignature {
+            amount: Amount::from(64),
+            keyset_id,
+            c: SecretKey::generate().public_key(),
+            dleq: None,
+        }],
+        None,
+    )
+    .await?;
+    tx.add_completed_operation(
+        &Operation::new_swap(Amount::from(100), Amount::from(64), Amount::from(1)),
+        &HashMap::from([(keyset_id, Amount::from(1))]),
+    )
+    .await
+}
+
+/// Test concurrent operations on the same keyset do not wait on each other.
 ///
 /// This test is intended for database backends with row-level locking. It is
 /// invoked explicitly by the PostgreSQL test suite rather than the generic
 /// database macro because SQLite serializes writes at the database level.
-pub async fn concurrent_multi_keyset_spends_use_consistent_lock_order(db: DynMintDatabase) {
-    let first_keyset = Id::from_str("00916bbf7ef91a36").unwrap();
-    let second_keyset = Id::from_str("00916bbf7ef91a37").unwrap();
+pub async fn concurrent_operations_on_same_keyset_do_not_block(db: DynMintDatabase) {
+    let keyset_id = Id::from_str("00916bbf7ef91a36").unwrap();
 
-    let create_proof = |keyset_id| Proof {
+    let create_proof = || Proof {
         amount: Amount::from(100),
         keyset_id,
         secret: Secret::generate(),
@@ -444,65 +470,45 @@ pub async fn concurrent_multi_keyset_spends_use_consistent_lock_order(db: DynMin
         dleq: None,
         p2pk_e: None,
     };
-
-    // The transactions use disjoint proof rows but update the same two
-    // keyset_amounts rows. Reverse the proof/keyset order so only the explicit
-    // keyset ordering in the upsert can guarantee a common lock order.
-    let first_proofs = vec![create_proof(first_keyset), create_proof(second_keyset)];
-    let second_proofs = vec![create_proof(second_keyset), create_proof(first_keyset)];
-    let first_ys: Vec<_> = first_proofs
-        .iter()
-        .map(|proof| proof.y().unwrap())
-        .collect();
-    let second_ys: Vec<_> = second_proofs
-        .iter()
-        .map(|proof| proof.y().unwrap())
-        .collect();
+    let first_proofs = vec![create_proof()];
+    let second_proofs = vec![create_proof()];
+    let first_ys: Vec<_> = first_proofs.iter().map(|p| p.y().unwrap()).collect();
+    let second_ys: Vec<_> = second_proofs.iter().map(|p| p.y().unwrap()).collect();
 
     let mut tx = db.begin_transaction().await.unwrap();
-    tx.add_proofs(
-        first_proofs,
-        None,
-        &Operation::new_swap(Amount::ZERO, Amount::ZERO, Amount::ZERO),
-    )
-    .await
-    .unwrap();
-    tx.add_proofs(
-        second_proofs,
-        None,
-        &Operation::new_swap(Amount::ZERO, Amount::ZERO, Amount::ZERO),
-    )
-    .await
-    .unwrap();
+    for proofs in [first_proofs, second_proofs] {
+        tx.add_proofs(
+            proofs,
+            None,
+            &Operation::new_swap(Amount::ZERO, Amount::ZERO, Amount::ZERO),
+        )
+        .await
+        .unwrap();
+    }
     tx.commit().await.unwrap();
 
-    let barrier = Arc::new(Barrier::new(2));
-    let first_db = db.clone();
-    let first_barrier = Arc::clone(&barrier);
-    let first = tokio::spawn(async move {
-        let mut tx = first_db.begin_transaction().await?;
-        let mut proofs = tx.get_proofs(&first_ys).await?;
-        first_barrier.wait().await;
-        tx.update_proofs_state(&mut proofs, State::Spent).await?;
-        tx.commit().await
-    });
+    // The first transaction writes every per-keyset amount and stays open
+    // while the second one does the same and commits.
+    let mut first = db.begin_transaction().await.unwrap();
+    record_swap_on_keyset(&mut *first, &first_ys, keyset_id)
+        .await
+        .unwrap();
 
-    let second = tokio::spawn(async move {
-        let mut tx = db.begin_transaction().await?;
-        let mut proofs = tx.get_proofs(&second_ys).await?;
-        barrier.wait().await;
-        tx.update_proofs_state(&mut proofs, State::Spent).await?;
-        tx.commit().await
-    });
-
-    let (first_result, second_result) = tokio::time::timeout(Duration::from_secs(10), async {
-        tokio::join!(first, second)
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut second = db.begin_transaction().await?;
+        record_swap_on_keyset(&mut *second, &second_ys, keyset_id).await?;
+        second.commit().await
     })
     .await
-    .expect("concurrent multi-keyset spends should not deadlock");
+    .expect("second operation must not wait for the first to commit")
+    .unwrap();
 
-    first_result.unwrap().unwrap();
-    second_result.unwrap().unwrap();
+    first.commit().await.unwrap();
+
+    let issued = db.get_total_issued().await.unwrap();
+    let redeemed = db.get_total_redeemed().await.unwrap();
+    assert_eq!(issued.get(&keyset_id), Some(&Amount::from(128)));
+    assert_eq!(redeemed.get(&keyset_id), Some(&Amount::from(200)));
 }
 
 /// Test removing proofs
@@ -569,78 +575,59 @@ pub async fn get_total_redeemed<DB>(db: DB)
 where
     DB: Database<Error> + KeysDatabase<Err = Error>,
 {
-    use cashu::State;
+    let first_keyset = setup_keyset(&db).await;
+    let second_keyset = Id::from_str("00916bbf7ef91a37").unwrap();
 
-    let keyset_id = setup_keyset(&db).await;
-    let quote_id = QuoteId::new();
-
+    let create_proof = |amount: u64, keyset_id| Proof {
+        amount: Amount::from(amount),
+        keyset_id,
+        secret: Secret::generate(),
+        c: SecretKey::generate().public_key(),
+        witness: None,
+        dleq: None,
+        p2pk_e: None,
+    };
     let proofs = vec![
-        Proof {
-            amount: Amount::from(100),
-            keyset_id,
-            secret: Secret::generate(),
-            c: SecretKey::generate().public_key(),
-            witness: None,
-            dleq: None,
-            p2pk_e: None,
-        },
-        Proof {
-            amount: Amount::from(200),
-            keyset_id,
-            secret: Secret::generate(),
-            c: SecretKey::generate().public_key(),
-            witness: None,
-            dleq: None,
-            p2pk_e: None,
-        },
-        Proof {
-            amount: Amount::from(300),
-            keyset_id,
-            secret: Secret::generate(),
-            c: SecretKey::generate().public_key(),
-            witness: None,
-            dleq: None,
-            p2pk_e: None,
-        },
+        create_proof(100, first_keyset),
+        create_proof(200, second_keyset),
+        create_proof(300, first_keyset),
+        create_proof(400, second_keyset),
     ];
+    let ys: Vec<_> = proofs.iter().map(|p| p.y().unwrap()).collect();
 
-    let ys: Vec<_> = proofs.iter().map(|p| p.c).collect();
-
-    // Add proofs
     let mut tx = Database::begin_transaction(&db).await.unwrap();
     tx.add_proofs(
-        proofs.clone(),
-        Some(quote_id),
+        proofs,
+        None,
         &Operation::new_swap(Amount::ZERO, Amount::ZERO, Amount::ZERO),
     )
     .await
     .unwrap();
     tx.commit().await.unwrap();
 
-    // First update to Pending (valid state transition)
+    // Pending is not redeemed.
     let mut tx = Database::begin_transaction(&db).await.unwrap();
-    let mut proofs = tx.get_proofs(&[ys[0], ys[1]]).await.unwrap();
-    check_state_transition(proofs.state, State::Pending).unwrap();
-    tx.update_proofs_state(&mut proofs, State::Pending)
+    let mut pending = tx.get_proofs(&ys).await.unwrap();
+    tx.update_proofs_state(&mut pending, State::Pending)
         .await
         .unwrap();
     tx.commit().await.unwrap();
+    assert!(db.get_total_redeemed().await.unwrap().is_empty());
 
-    // Then mark some as spent
-    let mut tx = Database::begin_transaction(&db).await.unwrap();
-    let mut proofs = tx.get_proofs(&[ys[0], ys[1]]).await.unwrap();
-    check_state_transition(proofs.state, State::Spent).unwrap();
-    tx.update_proofs_state(&mut proofs, State::Spent)
-        .await
-        .unwrap();
-    tx.commit().await.unwrap();
+    // Spend one proof of each keyset in one call, then one more of the first.
+    for spent in [&ys[0..2], &ys[2..3]] {
+        let mut tx = Database::begin_transaction(&db).await.unwrap();
+        let mut proofs = tx.get_proofs(spent).await.unwrap();
+        tx.update_proofs_state(&mut proofs, State::Spent)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+    }
 
-    // Get total redeemed
     let totals = db.get_total_redeemed().await.unwrap();
-    let total = totals.get(&keyset_id).copied().unwrap_or(Amount::ZERO);
-
-    // Should be 300 (100 + 200)
-    assert!(total >= Amount::from(300));
+    assert_eq!(totals.len(), 2);
+    assert_eq!(totals.get(&first_keyset), Some(&Amount::from(400)));
+    assert_eq!(totals.get(&second_keyset), Some(&Amount::from(200)));
 }
 
 /// Test get proof ys by quote id

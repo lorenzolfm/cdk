@@ -13,6 +13,7 @@ use cdk_common::secret::Secret;
 use cdk_common::util::unix_time;
 use cdk_common::{Amount, Id, Proof, Proofs, PublicKey, State};
 
+use super::keyset_ledger::{self, EntryKind};
 use super::{SQLMintDatabase, SQLTransaction};
 use crate::database::DatabaseExecutor;
 use crate::pool::DatabasePool;
@@ -93,20 +94,6 @@ pub(super) fn sql_row_to_proof_with_state(row: Vec<Column>) -> Result<(Proof, St
             p2pk_e: None,
         },
         state,
-    ))
-}
-
-pub(super) fn sql_row_to_hashmap_amount(row: Vec<Column>) -> Result<(Id, Amount), Error> {
-    unpack_into!(
-        let (
-            keyset_id, amount
-        ) = row
-    );
-
-    let amount: u64 = column_as_number!(amount);
-    Ok((
-        column_as_string!(keyset_id, Id::from_str, Id::from_bytes),
-        Amount::from(amount),
     ))
 }
 
@@ -192,8 +179,8 @@ where
     /// Also updates the `state` field on the [`ProofsWithState`] wrapper to reflect
     /// the new state after the database update succeeds.
     ///
-    /// When the new state is `Spent`, this method also updates the `keyset_amounts`
-    /// table to track the total redeemed amount per keyset for analytics purposes.
+    /// When the new state is `Spent`, this method also appends the redeemed amount
+    /// per keyset to the `keyset_ledger` table for analytics purposes.
     ///
     /// # Prerequisites
     ///
@@ -220,21 +207,11 @@ where
         }
 
         if new_state == State::Spent {
-            query(
-                    r#"
-                    INSERT INTO keyset_amounts (keyset_id, total_issued, total_redeemed)
-                    SELECT keyset_id, 0, COALESCE(SUM(amount), 0)
-                    FROM proof
-                    WHERE y IN (:ys)
-                    GROUP BY keyset_id
-                    ORDER BY keyset_id
-                    ON CONFLICT (keyset_id)
-                    DO UPDATE SET total_redeemed = keyset_amounts.total_redeemed + EXCLUDED.total_redeemed
-                    "#,
-                )?
-                .bind_vec("ys", ys.iter().map(|y| y.to_bytes().to_vec()).collect())?
-                .execute(&self.inner)
-                .await?;
+            keyset_ledger::append_redeemed_for_proofs(
+                &self.inner,
+                ys.iter().map(|y| y.to_bytes().to_vec()).collect(),
+            )
+            .await?;
         }
 
         proofs.state = new_state;
@@ -561,20 +538,7 @@ where
             .get()
             .await
             .map_err(|e| Error::Database(Box::new(e)))?;
-        query(
-            r#"
-            SELECT
-                keyset_id,
-                total_redeemed as amount
-            FROM
-                keyset_amounts
-        "#,
-        )?
-        .fetch_all(&*conn)
-        .await?
-        .into_iter()
-        .map(sql_row_to_hashmap_amount)
-        .collect()
+        keyset_ledger::totals(&*conn, EntryKind::Redeemed).await
     }
 
     async fn get_proof_ys_by_operation_id(

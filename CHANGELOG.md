@@ -7,6 +7,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- cdk-sql-common: Mint per-keyset issued, redeemed and fee totals now live in an append-only `keyset_ledger` table that replaces the `keyset_amounts` counter table, so concurrent swaps, mints and melts on the same keyset no longer wait on a shared row. The migration carries existing totals over for SQLite and PostgreSQL.
+
 ### Fixed
 
 - cashu: P2BK V4 tokens now encode `pe` as CBOR bytes. Wallets using CDK 0.16–0.18 must upgrade to receive these tokens. Updated wallets continue to accept legacy hex-encoded tokens (#2712).

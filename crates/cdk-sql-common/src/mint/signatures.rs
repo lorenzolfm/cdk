@@ -1,6 +1,6 @@
 //! Signatures database implementation
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
 
 use async_trait::async_trait;
@@ -9,11 +9,23 @@ use cdk_common::quote_id::QuoteId;
 use cdk_common::util::unix_time;
 use cdk_common::{Amount, BlindSignature, BlindSignatureDleq, Id, PublicKey, SecretKey};
 
-use super::proofs::sql_row_to_hashmap_amount;
+use super::keyset_ledger::{self, EntryKind};
 use super::{SQLMintDatabase, SQLTransaction};
 use crate::pool::DatabasePool;
 use crate::stmt::{query, Column};
 use crate::{column_as_nullable_string, column_as_number, column_as_string, unpack_into};
+
+/// Add a signature's amount to the running issued total of its keyset.
+fn add_issued(
+    issued_by_keyset: &mut BTreeMap<Id, Amount>,
+    signature: &BlindSignature,
+) -> Result<(), Error> {
+    let total = issued_by_keyset.entry(signature.keyset_id).or_default();
+    *total = total
+        .checked_add(signature.amount)
+        .ok_or(Error::AmountOverflow)?;
+    Ok(())
+}
 
 pub(crate) fn sql_row_to_blind_signature(row: Vec<Column>) -> Result<BlindSignature, Error> {
     unpack_into!(
@@ -101,6 +113,8 @@ where
             left.to_bytes().cmp(&right.to_bytes())
         });
 
+        let mut issued_by_keyset = BTreeMap::new();
+
         // Mutate rows in blinded-message order while retaining the request order index.
         for (i, (message, signature)) in ordered_signatures {
             match existing_rows.remove(message) {
@@ -133,18 +147,7 @@ where
                     .execute(&self.inner)
                     .await?;
 
-                    query(
-                        r#"
-                        INSERT INTO keyset_amounts (keyset_id, total_issued, total_redeemed)
-                        VALUES (:keyset_id, :amount, 0)
-                        ON CONFLICT (keyset_id)
-                        DO UPDATE SET total_issued = keyset_amounts.total_issued + EXCLUDED.total_issued
-                        "#,
-                    )?
-                    .bind("amount", i64::try_from(u64::from(signature.amount))?)
-                    .bind("keyset_id", signature.keyset_id.to_string())
-                    .execute(&self.inner)
-                    .await?;
+                    add_issued(&mut issued_by_keyset, signature)?;
                 }
                 Some((c, _dleq_e, _dleq_s)) => {
                     // Blind message exists: check if c is NULL
@@ -173,18 +176,7 @@ where
                             .execute(&self.inner)
                             .await?;
 
-                            query(
-                                r#"
-                                INSERT INTO keyset_amounts (keyset_id, total_issued, total_redeemed)
-                                VALUES (:keyset_id, :amount, 0)
-                                ON CONFLICT (keyset_id)
-                                DO UPDATE SET total_issued = keyset_amounts.total_issued + EXCLUDED.total_issued
-                                "#,
-                            )?
-                            .bind("amount", i64::try_from(u64::from(signature.amount))?)
-                            .bind("keyset_id", signature.keyset_id.to_string())
-                            .execute(&self.inner)
-                            .await?;
+                            add_issued(&mut issued_by_keyset, signature)?;
                         }
                         _ => {
                             // Blind message already has c: Error
@@ -211,6 +203,10 @@ where
             return Err(Error::Internal(
                 "Did not check all existing rows".to_string(),
             ));
+        }
+
+        for (keyset_id, amount) in issued_by_keyset {
+            keyset_ledger::append(&self.inner, EntryKind::Issued, &keyset_id, amount).await?;
         }
 
         Ok(())
@@ -388,20 +384,7 @@ where
             .get()
             .await
             .map_err(|e| Error::Database(Box::new(e)))?;
-        query(
-            r#"
-            SELECT
-                keyset_id,
-                total_issued as amount
-            FROM
-                keyset_amounts
-        "#,
-        )?
-        .fetch_all(&*conn)
-        .await?
-        .into_iter()
-        .map(sql_row_to_hashmap_amount)
-        .collect()
+        keyset_ledger::totals(&*conn, EntryKind::Issued).await
     }
 
     async fn get_blinded_secrets_by_operation_id(
