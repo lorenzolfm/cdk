@@ -1,5 +1,6 @@
+use std::borrow::Cow;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -94,7 +95,7 @@ impl DatabasePool for SqliteConnectionManager {
                     )));
                 }
             }
-            Connection::open(path)?
+            Connection::open(plain_file_name(Path::new(path)))?
         } else {
             Connection::open_in_memory()?
         };
@@ -121,6 +122,21 @@ impl DatabasePool for SqliteConnectionManager {
         }
 
         Ok(async_sqlite::AsyncSqlite::new(conn, stale))
+    }
+}
+
+/// Returns the name to hand SQLite so that it opens `path` as a plain file.
+///
+/// The bundled SQLite is built with `SQLITE_USE_URI`, so it parses every name
+/// that starts with `file:` as a URI whatever the open flags say, and
+/// `file:wallet.sqlite?mode=memory` would open an in-memory database. Only a
+/// relative path can start with `file:`, and a leading `./` names the same
+/// file without that prefix.
+fn plain_file_name(path: &Path) -> Cow<'_, Path> {
+    if path.as_os_str().as_encoded_bytes().starts_with(b"file:") {
+        Cow::Owned(Path::new(".").join(path))
+    } else {
+        Cow::Borrowed(path)
     }
 }
 
