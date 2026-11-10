@@ -55,6 +55,60 @@ mod tests {
         assert_eq!("test", &res.unwrap().description.unwrap());
     }
 
+    /// Removes the listed files when dropped, so a failing test cleans up too.
+    #[cfg(unix)]
+    struct RemoveFilesOnDrop(Vec<std::path::PathBuf>);
+
+    #[cfg(unix)]
+    impl Drop for RemoveFilesOnDrop {
+        fn drop(&mut self) {
+            for path in &self.0 {
+                match std::fs::remove_file(path) {
+                    Ok(()) => {}
+                    // SQLite removes its `-wal` and `-shm` files on a clean close.
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => eprintln!("could not remove {}: {error}", path.display()),
+                }
+            }
+        }
+    }
+
+    /// SQLite reads a path that starts with `file:` as a URI, and
+    /// `?mode=memory` would then open a private in-memory database on every
+    /// pooled connection. The path must be opened as the file it names.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn file_uri_shaped_path_persists_across_reopen() {
+        use cdk_common::mint_url::MintUrl;
+        use cdk_common::MintInfo;
+
+        // Only a relative path can start with `file:`, so the database lands in
+        // the working directory.
+        let name = format!("file:cdk-test-{}.sqlite?mode=memory", uuid::Uuid::new_v4());
+        let path = std::path::PathBuf::from(&name);
+        let _cleanup = RemoveFilesOnDrop(vec![
+            path.clone(),
+            std::path::PathBuf::from(format!("{name}-wal")),
+            std::path::PathBuf::from(format!("{name}-shm")),
+        ]);
+        let mint_url = MintUrl::from_str("https://mint.xyz").unwrap();
+
+        #[cfg(feature = "sqlcipher")]
+        let open = || WalletSqliteDatabase::new((path.clone(), "password".to_string()));
+        #[cfg(not(feature = "sqlcipher"))]
+        let open = || WalletSqliteDatabase::new(path.clone());
+
+        let db = open().await.unwrap();
+        db.add_mint(mint_url.clone(), Some(MintInfo::new().description("test")))
+            .await
+            .unwrap();
+        drop(db);
+
+        let db = open().await.unwrap();
+        assert!(db.get_mint(mint_url).await.unwrap().is_some());
+        assert!(path.exists());
+    }
+
     #[tokio::test]
     async fn test_proof_with_dleq() {
         use cdk_common::mint_url::MintUrl;
