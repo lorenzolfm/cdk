@@ -1032,7 +1032,8 @@ async fn setup_sqlite_database(
     let db = {
         // Get password from command line arguments for sqlcipher
         let password = _password
-            .ok_or_else(|| anyhow!("Password required when sqlcipher feature is enabled"))?;
+            .ok_or_else(|| anyhow!("Password required when sqlcipher feature is enabled"))?
+            .parse::<cdk_sqlite::SqlcipherKey>()?;
         tracing::info!("Using SQLCipher encryption for SQLite database");
         MintSqliteDatabase::new((sql_db_path, password)).await?
     };
@@ -1748,9 +1749,12 @@ async fn setup_authentication(
                     #[cfg(feature = "sqlcipher")]
                     let sqlite_db = {
                         // Get password from command line arguments for sqlcipher
-                        let password = _password.clone().ok_or_else(|| {
-                            anyhow!("Password required when sqlcipher feature is enabled")
-                        })?;
+                        let password = _password
+                            .clone()
+                            .ok_or_else(|| {
+                                anyhow!("Password required when sqlcipher feature is enabled")
+                            })?
+                            .parse::<cdk_sqlite::SqlcipherKey>()?;
                         MintSqliteAuthDatabase::new((sql_db_path, password)).await?
                     };
 
