@@ -10,6 +10,12 @@
 ### Fixed
 
 - cashu: P2BK V4 tokens now encode `pe` as CBOR bytes. Wallets using CDK 0.16–0.18 must upgrade to receive these tokens. Updated wallets continue to accept legacy hex-encoded tokens (#2712).
+- cdk-sqlite: A database path now always opens the file it names. Paths that SQLite would read as an in-memory database, a temporary database or a `file:` URI no longer silently open a database that loses its writes, a relative path no longer follows a later change of the current directory to another file, and an empty path or one containing a NUL byte is rejected (#2875).
+
+### Changed
+
+- cdk-sqlite: **BREAKING** - Replace the `From<&str>`, `From<(&str, &str)>`, `From<PathBuf>`, `From<&PathBuf>` and `From<(PathBuf, String)>` conversions into the SQLite config with the exported `SqliteConfig::file(path)?`, `SqliteConfig::memory()` and `.with_password(..)`. A path is always a file path; see the [v0.19 migration guide](docs/migrations/v0.19.md#sqlite-database-locations) (#2875).
+- cdk-ffi: Passing the path `":memory:"` to `WalletSqliteDatabase`, `WalletStore::Sqlite` or `WalletDbBackend::Sqlite` still opens an in-memory database but is deprecated and logs a warning. Use `WalletSqliteDatabase::new_in_memory()` instead (#2875).
 
 ### Removed
 
