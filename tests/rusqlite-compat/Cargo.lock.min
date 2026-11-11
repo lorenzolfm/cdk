@@ -319,6 +319,7 @@ dependencies = [
  "cdk-sql-common",
  "rusqlite",
  "serde_json",
+ "thiserror",
  "tokio",
  "tracing",
  "uuid",

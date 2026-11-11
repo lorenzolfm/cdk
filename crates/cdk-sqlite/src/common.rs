@@ -1,8 +1,8 @@
-use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use std::{fmt, io};
 
 use cdk_sql_common::pool::{self, DatabasePool};
 use cdk_sql_common::value::Value;
@@ -10,47 +10,201 @@ use rusqlite::{ffi, Connection};
 
 use crate::async_sqlite;
 
-/// The config need to create a new SQLite connection
-pub struct Config {
-    path: Option<String>,
-    password: Option<String>,
-    /// Set once the in-memory database has been opened. It lives only inside its
-    /// single connection, so a second open means that connection was discarded.
-    in_memory_opened: AtomicBool,
+/// Error returned when a [`SqliteConfig`] cannot be built
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SqliteConfigError {
+    /// The database file path is empty
+    #[error("SQLite database path is empty")]
+    EmptyPath,
+    /// A relative path could not be resolved against the current directory
+    #[error("cannot resolve the SQLite database path against the current directory: {kind}")]
+    CurrentDir {
+        /// Why the current directory could not be read
+        kind: io::ErrorKind,
+    },
+    /// The path contains a NUL byte, which SQLite cannot receive
+    #[error("SQLite database path contains a NUL byte")]
+    NulByte,
+    /// The path is not valid Unicode, which SQLite requires on this platform
+    #[cfg(not(unix))]
+    #[error("SQLite database path is not valid Unicode")]
+    NotUnicode,
 }
 
-impl Clone for Config {
+/// An absolute path that SQLite reads as exactly that file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DatabaseFile(PathBuf);
+
+impl DatabaseFile {
+    fn new(path: PathBuf) -> Result<Self, SqliteConfigError> {
+        if path.as_os_str().is_empty() {
+            return Err(SqliteConfigError::EmptyPath);
+        }
+
+        // SQLite resolves a relative name against the current directory at every
+        // open, so a pool would follow a later directory change to another file.
+        // An absolute name is also never `:memory:` and never starts with
+        // `file:`, the two spellings SQLite gives another meaning.
+        let name = std::path::absolute(&path)
+            .map_err(|error| SqliteConfigError::CurrentDir { kind: error.kind() })?;
+        debug_assert!(name.is_absolute());
+
+        // rusqlite hands SQLite a C string: Unix passes the raw bytes, other
+        // platforms pass UTF-8.
+        if name.as_os_str().as_encoded_bytes().contains(&0) {
+            return Err(SqliteConfigError::NulByte);
+        }
+        #[cfg(not(unix))]
+        if name.to_str().is_none() {
+            return Err(SqliteConfigError::NotUnicode);
+        }
+
+        Ok(Self(name))
+    }
+
+    /// The name handed to SQLite.
+    fn sqlite_name(&self) -> &Path {
+        &self.0
+    }
+}
+
+/// An in-memory database lives inside a single connection.
+const MEMORY_CONNECTIONS_MAX: usize = 1;
+
+// The discarded-connection guard reads a second open as a lost database. That
+// holds only while the pool keeps a single connection.
+const _: () = assert!(MEMORY_CONNECTIONS_MAX == 1);
+
+/// Where the database lives.
+enum Location {
+    File(DatabaseFile),
+    /// The database exists only inside its single connection.
+    Memory {
+        /// Set once opened, so a second open means that connection was discarded.
+        opened: AtomicBool,
+    },
+}
+
+impl Clone for Location {
     fn clone(&self) -> Self {
-        Self {
-            path: self.path.clone(),
-            password: self.password.clone(),
+        match self {
+            Self::File(file) => Self::File(file.clone()),
             // A cloned config describes a new pool with its own database.
-            in_memory_opened: AtomicBool::new(false),
+            Self::Memory { .. } => Self::Memory {
+                opened: AtomicBool::new(false),
+            },
         }
     }
 }
 
-impl fmt::Debug for Config {
+impl fmt::Debug for Location {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Config")
-            .field("path", &self.path)
+        match self {
+            Self::File(file) => f.debug_tuple("File").field(&file.sqlite_name()).finish(),
+            Self::Memory { .. } => f.write_str("Memory"),
+        }
+    }
+}
+
+/// The config needed to open SQLite connections.
+///
+/// Build it with [`SqliteConfig::file`] or [`SqliteConfig::memory`]. Every
+/// connection opened from one config reaches the same database.
+#[derive(Clone)]
+pub struct SqliteConfig {
+    location: Location,
+    password: Option<String>,
+}
+
+impl SqliteConfig {
+    /// A database stored in the file at `path`.
+    ///
+    /// The path is always a filesystem path: `:memory:` and `file:` URIs name
+    /// files of that name in the current directory. A relative path is
+    /// resolved against the current directory once, here, so a later change of
+    /// directory does not move the database.
+    pub fn file<P>(path: P) -> Result<Self, SqliteConfigError>
+    where
+        P: Into<PathBuf>,
+    {
+        Ok(Self {
+            location: Location::File(DatabaseFile::new(path.into())?),
+            password: None,
+        })
+    }
+
+    /// A database held in memory and lost when it is dropped.
+    ///
+    /// It has a single connection. If that connection is discarded, every later
+    /// operation fails instead of silently starting over with an empty database.
+    pub fn memory() -> Self {
+        Self {
+            location: Location::Memory {
+                opened: AtomicBool::new(false),
+            },
+            password: None,
+        }
+    }
+
+    /// Set the SQLCipher key used to open the database.
+    pub fn with_password<P>(mut self, password: P) -> Self
+    where
+        P: Into<String>,
+    {
+        self.password = Some(password.into());
+        self
+    }
+}
+
+impl fmt::Debug for SqliteConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SqliteConfig")
+            .field("location", &self.location)
             .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
             .finish()
     }
 }
 
-impl pool::DatabaseConfig for Config {
+impl pool::DatabaseConfig for SqliteConfig {
     fn default_timeout(&self) -> Duration {
         Duration::from_secs(5)
     }
 
     fn max_size(&self) -> usize {
-        if self.path.is_none() {
-            1
-        } else {
-            20
+        match self.location {
+            Location::File(_) => 20,
+            Location::Memory { .. } => MEMORY_CONNECTIONS_MAX,
         }
     }
+}
+
+fn cant_open(message: &str) -> pool::Error<rusqlite::Error> {
+    pool::Error::Resource(rusqlite::Error::SqliteFailure(
+        ffi::Error::new(ffi::SQLITE_CANTOPEN),
+        Some(message.to_owned()),
+    ))
+}
+
+fn open_file(file: &DatabaseFile) -> Result<Connection, pool::Error<rusqlite::Error>> {
+    let name = file.sqlite_name();
+    if let Some(parent) = name.parent() {
+        if !parent.exists() {
+            return Err(pool::Error::Resource(rusqlite::Error::InvalidPath(
+                name.to_path_buf(),
+            )));
+        }
+    }
+
+    let conn = Connection::open(name)?;
+
+    // SQLite reports an empty file name for a temporary or in-memory database.
+    // Such a database is private to this connection, so the pool's other
+    // connections would each see a different one.
+    if conn.path() == Some("") {
+        return Err(cant_open("SQLite did not open the database file on disk"));
+    }
+
+    Ok(conn)
 }
 
 /// Sqlite connection manager
@@ -58,7 +212,7 @@ impl pool::DatabaseConfig for Config {
 pub struct SqliteConnectionManager;
 
 impl DatabasePool for SqliteConnectionManager {
-    type Config = Config;
+    type Config = SqliteConfig;
 
     type Connection = async_sqlite::AsyncSqlite;
 
@@ -73,30 +227,21 @@ impl DatabasePool for SqliteConnectionManager {
         stale: Arc<AtomicBool>,
         _timeout: Duration,
     ) -> Result<Self::Connection, pool::Error<Self::Error>> {
-        let in_memory = config.path.is_none();
-        if in_memory && config.in_memory_opened.load(Ordering::SeqCst) {
-            // Handing out a fresh, empty database would silently drop every
-            // previous write, so make all later operations fail instead.
-            tracing::error!("In-memory SQLite connection was discarded; its database is lost");
-            return Err(pool::Error::Resource(rusqlite::Error::SqliteFailure(
-                ffi::Error::new(ffi::SQLITE_CANTOPEN),
-                Some("in-memory database was lost after its connection was discarded".to_owned()),
-            )));
-        }
-
-        let conn = if let Some(path) = config.path.as_ref() {
-            // Check if parent directory exists before attempting to open database
-            let path_buf = PathBuf::from(path);
-            if let Some(parent) = path_buf.parent() {
-                if !parent.to_str().unwrap_or_default().is_empty() && !parent.exists() {
-                    return Err(pool::Error::Resource(rusqlite::Error::InvalidPath(
-                        path_buf.clone(),
-                    )));
+        let conn = match &config.location {
+            Location::File(file) => open_file(file)?,
+            Location::Memory { opened } => {
+                if opened.load(Ordering::SeqCst) {
+                    // Handing out a fresh, empty database would silently drop
+                    // every previous write, so make all later operations fail.
+                    tracing::error!(
+                        "In-memory SQLite connection was discarded; its database is lost"
+                    );
+                    return Err(cant_open(
+                        "in-memory database was lost after its connection was discarded",
+                    ));
                 }
+                Connection::open_in_memory()?
             }
-            Connection::open(path)?
-        } else {
-            Connection::open_in_memory()?
         };
 
         if let Some(password) = config.password.as_ref() {
@@ -116,65 +261,11 @@ impl DatabasePool for SqliteConnectionManager {
 
         conn.busy_timeout(Duration::from_secs(10))?;
 
-        if in_memory {
-            config.in_memory_opened.store(true, Ordering::SeqCst);
+        if let Location::Memory { opened } = &config.location {
+            opened.store(true, Ordering::SeqCst);
         }
 
         Ok(async_sqlite::AsyncSqlite::new(conn, stale))
-    }
-}
-
-impl From<PathBuf> for Config {
-    fn from(path: PathBuf) -> Self {
-        path.to_str().unwrap_or_default().into()
-    }
-}
-
-impl From<(PathBuf, String)> for Config {
-    fn from((path, password): (PathBuf, String)) -> Self {
-        (path.to_str().unwrap_or_default(), password.as_str()).into()
-    }
-}
-
-impl From<&PathBuf> for Config {
-    fn from(path: &PathBuf) -> Self {
-        path.to_str().unwrap_or_default().into()
-    }
-}
-
-impl From<&str> for Config {
-    fn from(path: &str) -> Self {
-        if path.contains(":memory:") {
-            Config {
-                path: None,
-                password: None,
-                in_memory_opened: Default::default(),
-            }
-        } else {
-            Config {
-                path: Some(path.to_owned()),
-                password: None,
-                in_memory_opened: Default::default(),
-            }
-        }
-    }
-}
-
-impl From<(&str, &str)> for Config {
-    fn from((path, pass): (&str, &str)) -> Self {
-        if path.contains(":memory:") {
-            Config {
-                path: None,
-                password: Some(pass.to_owned()),
-                in_memory_opened: Default::default(),
-            }
-        } else {
-            Config {
-                path: Some(path.to_owned()),
-                password: Some(pass.to_owned()),
-                in_memory_opened: Default::default(),
-            }
-        }
     }
 }
 
@@ -204,17 +295,56 @@ pub fn from_sqlite(v: rusqlite::types::Value) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::Config;
+    use super::{DatabaseFile, SqliteConfig, SqliteConfigError};
 
     #[test]
     fn config_debug_redacts_sqlcipher_password() {
         let secret = "sqlcipher-password-secret";
-        let config = Config::from(("wallet.sqlite", secret));
+        let config = SqliteConfig::file("wallet.sqlite")
+            .expect("valid path")
+            .with_password(secret);
 
         let debug = format!("{config:?}");
 
         assert!(debug.contains("wallet.sqlite"));
         assert!(debug.contains("[REDACTED]"));
         assert!(!debug.contains(secret));
+    }
+
+    #[test]
+    fn empty_path_is_rejected() {
+        assert_eq!(
+            SqliteConfig::file("").map(|_| ()),
+            Err(SqliteConfigError::EmptyPath)
+        );
+    }
+
+    #[test]
+    fn relative_paths_resolve_against_the_current_directory() {
+        let dir = std::env::current_dir().expect("current directory");
+        for path in [
+            "wallet.sqlite",
+            ":memory:",
+            "file:wallet.sqlite?mode=memory",
+            "data/wallet.sqlite",
+        ] {
+            let file = DatabaseFile::new(path.into()).expect("valid path");
+            assert_eq!(file.sqlite_name(), dir.join(path));
+        }
+    }
+
+    #[test]
+    fn absolute_paths_are_unchanged() {
+        let path = std::env::temp_dir().join("wallet:memory:.sqlite");
+        let file = DatabaseFile::new(path.clone()).expect("valid path");
+        assert_eq!(file.sqlite_name(), path);
+    }
+
+    #[test]
+    fn nul_byte_is_rejected() {
+        assert_eq!(
+            SqliteConfig::file("wallet\0.sqlite").map(|_| ()),
+            Err(SqliteConfigError::NulByte)
+        );
     }
 }

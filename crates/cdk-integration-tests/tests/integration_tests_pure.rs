@@ -2581,9 +2581,11 @@ async fn test_custom_melt_quote_status_preserves_extra_json() {
             std::fs::create_dir_all(&temp_dir).expect("temp dir");
             let path = temp_dir.join("mint.db");
             Arc::new(
-                cdk_sqlite::MintSqliteDatabase::new(path.to_str().expect("db path"))
-                    .await
-                    .expect("sqlite db"),
+                cdk_sqlite::MintSqliteDatabase::new(
+                    cdk_sqlite::SqliteConfig::file(path).expect("db path"),
+                )
+                .await
+                .expect("sqlite db"),
             )
         }
     };

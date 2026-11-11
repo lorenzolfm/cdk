@@ -28,7 +28,7 @@ mod test {
     use cdk_sql_common::stmt::query;
 
     use super::*;
-    use crate::common::Config;
+    use crate::SqliteConfig;
 
     async fn provide_db(_test_name: String) -> MintSqliteDatabase {
         memory::empty().await.unwrap()
@@ -46,7 +46,7 @@ mod test {
 
     #[tokio::test]
     async fn bug_opening_relative_path() {
-        let config: Config = "test.db".into();
+        let config = SqliteConfig::file("test.db").expect("valid path");
 
         let pool = Pool::<SqliteConnectionManager>::new(config);
         let db = pool.get().await;
@@ -56,7 +56,7 @@ mod test {
 
     #[tokio::test]
     async fn exhausted_in_memory_pool_times_out() {
-        let config: Config = ":memory:".into();
+        let config = SqliteConfig::memory();
         let pool = Pool::<SqliteConnectionManager>::new(config);
 
         let _conn = pool.get().await.expect("valid connection");
@@ -67,7 +67,7 @@ mod test {
 
     #[tokio::test]
     async fn cloned_config_creates_independent_in_memory_databases() {
-        let config: Config = ":memory:".into();
+        let config = SqliteConfig::memory();
         let _first = MintSqliteDatabase::new(config.clone())
             .await
             .expect("first database");
@@ -78,7 +78,7 @@ mod test {
 
     #[test]
     fn discarded_in_memory_connection_is_not_replaced() {
-        let config: Config = ":memory:".into();
+        let config = SqliteConfig::memory();
         let pool = Pool::<SqliteConnectionManager>::new(config);
         let runtime = || {
             tokio::runtime::Builder::new_current_thread()
@@ -123,15 +123,11 @@ mod test {
             uuid::Uuid::new_v4()
         ));
 
-        #[cfg(not(feature = "sqlcipher"))]
-        let db = Arc::new(
-            MintSqliteAuthDatabase::new(&path)
-                .await
-                .expect("auth database"),
-        );
+        let config = SqliteConfig::file(&path).expect("valid path");
         #[cfg(feature = "sqlcipher")]
+        let config = config.with_password("test");
         let db = Arc::new(
-            MintSqliteAuthDatabase::new((path.clone(), "test".to_owned()))
+            MintSqliteAuthDatabase::new(config)
                 .await
                 .expect("auth database"),
         );
@@ -171,10 +167,9 @@ mod test {
 
         {
             let _ = remove_file(&file);
-            #[cfg(not(feature = "sqlcipher"))]
-            let config: Config = file.as_str().into();
+            let config = SqliteConfig::file(&file).expect("valid path");
             #[cfg(feature = "sqlcipher")]
-            let config: Config = (file.as_str(), "test").into();
+            let config = config.with_password("test");
 
             let pool = Pool::<SqliteConnectionManager>::new(config);
 
@@ -187,11 +182,10 @@ mod test {
                 .expect("create former db failed");
         }
 
-        #[cfg(not(feature = "sqlcipher"))]
-        let conn = MintSqliteDatabase::new(file.as_str()).await;
-
+        let config = SqliteConfig::file(&file).expect("valid path");
         #[cfg(feature = "sqlcipher")]
-        let conn = MintSqliteDatabase::new((file.as_str(), "test")).await;
+        let config = config.with_password("test");
+        let conn = MintSqliteDatabase::new(config).await;
 
         assert!(conn.is_ok(), "Failed with {:?}", conn.unwrap_err());
 

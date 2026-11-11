@@ -954,23 +954,23 @@ mod test {
         // Two independent instances, each with its own rotation_lock, sharing one
         // on-disk SQLite file. The in-process lock cannot coordinate them; only
         // the database can (BEGIN IMMEDIATE plus busy_timeout serialize the write
-        // transactions). A shared file is required because ":memory:" is always a
-        // private database per connection pool.
+        // transactions). A shared file is required because an in-memory database
+        // is always private to its connection pool.
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let path = std::env::temp_dir().join(format!(
             "cdk-rot-{}-{}.sqlite",
             std::process::id(),
             COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
-        let path_str = path.to_str().expect("utf-8 temp path");
+        let config = cdk_sqlite::SqliteConfig::file(&path).expect("valid path");
 
         let store_a = Arc::new(
-            MintSqliteDatabase::new(path_str)
+            MintSqliteDatabase::new(config.clone())
                 .await
                 .expect("shared-file db a"),
         );
         let store_b = Arc::new(
-            MintSqliteDatabase::new(path_str)
+            MintSqliteDatabase::new(config.clone())
                 .await
                 .expect("shared-file db b"),
         );
@@ -1028,8 +1028,8 @@ mod test {
 
         // Best-effort cleanup of the file and its WAL sidecars.
         let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_file(format!("{path_str}-wal"));
-        let _ = std::fs::remove_file(format!("{path_str}-shm"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

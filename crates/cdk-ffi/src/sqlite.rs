@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use cdk_common::database::{Error as CdkDatabaseError, WalletDatabase as CdkWalletDatabase};
 use cdk_sqlite::wallet::WalletSqliteDatabase as CdkWalletSqliteDatabase;
+use cdk_sqlite::SqliteConfig;
 
 use crate::{
     CurrencyUnit, FfiError, FfiWalletDatabaseWrapper, Id, KeySet, KeySetInfo, Keys, MeltQuote,
@@ -28,14 +29,22 @@ pub struct WalletSqliteDatabase {
 impl WalletSqliteDatabase {
     /// Create a new SQLite wallet database at `file_path`.
     ///
+    /// `file_path` is a filesystem path and must not be empty. A relative path
+    /// is resolved against the current directory once, when the database is
+    /// created, so a later change of directory does not move it. Passing
+    /// `":memory:"` still opens an in-memory database but is deprecated: a
+    /// future release will open a file of that name. Use
+    /// [`WalletSqliteDatabase::new_in_memory`] instead.
+    ///
     /// Wallet operations may later write to this database. Mobile hosts are
     /// responsible for choosing a durable file location and coordinating app
     /// lifecycle transitions around write-capable wallet calls.
     #[uniffi::constructor]
     pub fn new(file_path: String) -> Result<Arc<Self>, FfiError> {
+        let config = sqlite_config(file_path)?;
         let rt = crate::runtime::RuntimeGuard::new().map_err(FfiError::internal)?;
         let db = rt
-            .block_on(async move { CdkWalletSqliteDatabase::new(file_path.as_str()).await })
+            .block_on(async move { CdkWalletSqliteDatabase::new(config).await })
             .map_err(FfiError::internal)?;
         Ok(Arc::new(Self {
             inner: FfiWalletDatabaseWrapper::new(db),
@@ -57,6 +66,22 @@ impl WalletSqliteDatabase {
     }
 }
 
+/// The path that used to select an in-memory database.
+const DEPRECATED_IN_MEMORY_PATH: &str = ":memory:";
+
+fn sqlite_config(file_path: String) -> Result<SqliteConfig, FfiError> {
+    if file_path == DEPRECATED_IN_MEMORY_PATH {
+        tracing::warn!(
+            "Opening SQLite path \":memory:\" as an in-memory database is deprecated; \
+             a future release will open a file of that name. \
+             Use WalletSqliteDatabase::new_in_memory() instead"
+        );
+        return Ok(SqliteConfig::memory());
+    }
+
+    SqliteConfig::file(file_path).map_err(FfiError::internal)
+}
+
 #[uniffi::export(async_runtime = "tokio")]
 impl WalletSqliteDatabase {
     /// Close this database and all wallets sharing it after stopping their operations.
@@ -70,3 +95,20 @@ impl WalletSqliteDatabase {
 
 // Use macro to implement WalletDatabase trait - delegates all methods to inner
 crate::impl_ffi_wallet_database!(WalletSqliteDatabase);
+
+#[cfg(test)]
+mod tests {
+    use super::WalletSqliteDatabase;
+
+    #[test]
+    fn empty_path_is_rejected() {
+        assert!(WalletSqliteDatabase::new(String::new()).is_err());
+    }
+
+    #[test]
+    fn deprecated_memory_path_opens_in_memory() {
+        let dir = std::env::current_dir().expect("current directory");
+        WalletSqliteDatabase::new(":memory:".to_owned()).expect("in-memory database");
+        assert!(!dir.join(":memory:").exists());
+    }
+}

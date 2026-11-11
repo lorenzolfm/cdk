@@ -43,7 +43,7 @@ use cdk_postgres::{MintPgAuthDatabase, MintPgDatabase, PgConfig};
 #[cfg(feature = "sqlite")]
 use cdk_sqlite::mint::MintSqliteAuthDatabase;
 #[cfg(feature = "sqlite")]
-use cdk_sqlite::MintSqliteDatabase;
+use cdk_sqlite::{MintSqliteDatabase, SqliteConfig};
 use cli::CLIArgs;
 use config::{AuthType, DatabaseEngine, PaymentBackendType};
 use env_vars::ENV_WORK_DIR;
@@ -1026,16 +1026,16 @@ async fn setup_sqlite_database(
     let sql_db_path = work_dir.join("cdk-mintd.sqlite");
     tracing::info!("SQLite database path: {}", sql_db_path.display());
 
-    #[cfg(not(feature = "sqlcipher"))]
-    let db = MintSqliteDatabase::new(&sql_db_path).await?;
+    let config = SqliteConfig::file(sql_db_path)?;
     #[cfg(feature = "sqlcipher")]
-    let db = {
+    let config = {
         // Get password from command line arguments for sqlcipher
         let password = _password
             .ok_or_else(|| anyhow!("Password required when sqlcipher feature is enabled"))?;
         tracing::info!("Using SQLCipher encryption for SQLite database");
-        MintSqliteDatabase::new((sql_db_path, password)).await?
+        config.with_password(password)
     };
+    let db = MintSqliteDatabase::new(config).await?;
 
     tracing::info!("SQLite database initialized successfully");
     Ok(Arc::new(db))
@@ -1743,16 +1743,16 @@ async fn setup_authentication(
                 #[cfg(feature = "sqlite")]
                 {
                     let sql_db_path = _work_dir.join("cdk-mintd-auth.sqlite");
-                    #[cfg(not(feature = "sqlcipher"))]
-                    let sqlite_db = MintSqliteAuthDatabase::new(&sql_db_path).await?;
+                    let config = SqliteConfig::file(sql_db_path)?;
                     #[cfg(feature = "sqlcipher")]
-                    let sqlite_db = {
+                    let config = {
                         // Get password from command line arguments for sqlcipher
                         let password = _password.clone().ok_or_else(|| {
                             anyhow!("Password required when sqlcipher feature is enabled")
                         })?;
-                        MintSqliteAuthDatabase::new((sql_db_path, password)).await?
+                        config.with_password(password)
                     };
+                    let sqlite_db = MintSqliteAuthDatabase::new(config).await?;
 
                     Arc::new(sqlite_db)
                 }

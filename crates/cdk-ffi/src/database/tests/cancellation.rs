@@ -5,7 +5,7 @@ use std::time::Duration;
 use cdk_sql_common::database::ConnectionWithTransaction;
 use cdk_sql_common::pool::{self, DatabaseConfig, DatabasePool, Pool};
 use cdk_sql_common::SQLWalletDatabase;
-use cdk_sqlite::SqliteConnectionManager;
+use cdk_sqlite::{SqliteConfig, SqliteConnectionManager};
 
 use super::{run, FfiWalletDatabaseWrapper, WakeThread, WalletDatabase};
 
@@ -39,7 +39,8 @@ impl DatabasePool for Manager {
         timeout: Duration,
     ) -> Result<Self::Connection, pool::Error<Self::Error>> {
         config.creates.fetch_add(1, Ordering::SeqCst);
-        SqliteConnectionManager::new_resource(&config.path.as_str().into(), stale, timeout)
+        let sqlite = SqliteConfig::file(&config.path).expect("valid path");
+        SqliteConnectionManager::new_resource(&sqlite, stale, timeout)
     }
 }
 
@@ -55,7 +56,8 @@ fn cancelled_database_trait_call_cleans_up_outside_tokio() {
         .block_on(SQLWalletDatabase::<Manager>::new(config.clone()))
         .unwrap();
     let foreign: Arc<dyn WalletDatabase> = FfiWalletDatabaseWrapper::new(native);
-    let blocker = Pool::<SqliteConnectionManager>::new(config.path.as_str().into());
+    let blocker =
+        Pool::<SqliteConnectionManager>::new(SqliteConfig::file(&config.path).expect("valid path"));
     let transaction = runtime.block_on(async {
         ConnectionWithTransaction::new(blocker.get().await.unwrap())
             .await

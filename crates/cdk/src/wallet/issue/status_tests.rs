@@ -170,7 +170,13 @@ async fn quote_status_propagates_reload_failures() {
         for api in ["single", "batch", "fetch", "all"] {
             let path = std::env::temp_dir()
                 .join(format!("cdk-quote-status-{}.sqlite", uuid::Uuid::new_v4()));
-            let db = Arc::new(cdk_sqlite::WalletSqliteDatabase::new(&path).await.unwrap());
+            let db = Arc::new(
+                cdk_sqlite::WalletSqliteDatabase::new(
+                    cdk_sqlite::SqliteConfig::file(&path).unwrap(),
+                )
+                .await
+                .unwrap(),
+            );
             let client = Arc::new(MockMintConnector::new());
             let wallet = create_test_wallet_with_mock(db.clone(), client.clone()).await;
             let quote = test_mint_quote(test_mint_url());
