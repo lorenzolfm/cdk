@@ -10,7 +10,7 @@ use cdk_sql_common::stmt::query;
 use tokio::sync::oneshot;
 
 use super::AsyncSqlite;
-use crate::common::{Config, SqliteConnectionManager};
+use crate::common::{SqliteConfig, SqliteConnectionManager};
 
 mod cancellation;
 mod close;
@@ -160,8 +160,8 @@ impl DatabasePool for TestManager {
             .constructor
             .wait("open", Phase::Before)
             .map_err(|_| pool::Error::Poison)?;
-        let mut connection =
-            SqliteConnectionManager::new_resource(&Config::from(&config.path), stale, timeout)?;
+        let sqlite = SqliteConfig::file(&config.path).expect("valid path");
+        let mut connection = SqliteConnectionManager::new_resource(&sqlite, stale, timeout)?;
         connection.hooks = config.statements.clone();
         Ok(connection)
     }

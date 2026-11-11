@@ -178,9 +178,9 @@ async fn successful_drop_rollback_preserves_in_memory_database() {
     use cdk_sql_common::database::ConnectionWithTransaction;
     use cdk_sql_common::pool::Pool;
 
-    use crate::common::{Config, SqliteConnectionManager};
+    use crate::common::{SqliteConfig, SqliteConnectionManager};
 
-    let pool = Pool::<SqliteConnectionManager>::new(Config::from(":memory:"));
+    let pool = Pool::<SqliteConnectionManager>::new(SqliteConfig::memory());
     let connection = pool.get().await.unwrap();
     query("CREATE TABLE data (id INTEGER PRIMARY KEY); INSERT INTO data VALUES (1)")
         .unwrap()

@@ -3,14 +3,9 @@
 use cdk_common::database::Error;
 
 use super::WalletSqliteDatabase;
+use crate::SqliteConfig;
 
 /// Creates a new in-memory [`WalletSqliteDatabase`] instance
 pub async fn empty() -> Result<WalletSqliteDatabase, Error> {
-    #[cfg(not(feature = "sqlcipher"))]
-    let path = ":memory:";
-
-    #[cfg(feature = "sqlcipher")]
-    let path = (":memory:", "memory");
-
-    WalletSqliteDatabase::new(path).await
+    WalletSqliteDatabase::new(SqliteConfig::memory()).await
 }

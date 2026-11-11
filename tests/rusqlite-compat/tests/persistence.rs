@@ -1,6 +1,6 @@
 use cdk_common::database::WalletDatabase;
 use cdk_common::mint_url::MintUrl;
-use cdk_sqlite::WalletSqliteDatabase;
+use cdk_sqlite::{SqliteConfig, WalletSqliteDatabase};
 
 #[tokio::test]
 async fn persists_with_the_applications_rusqlite() {
@@ -8,13 +8,13 @@ async fn persists_with_the_applications_rusqlite() {
     let path = dir.path().join("wallet.sqlite");
     let mint_url: MintUrl = "https://mint.example".parse().expect("mint URL");
 
-    let db = WalletSqliteDatabase::new(&path)
+    let db = WalletSqliteDatabase::new(SqliteConfig::file(&path).expect("valid path"))
         .await
         .expect("wallet database");
     db.add_mint(mint_url.clone(), None).await.expect("add mint");
     drop(db);
 
-    let db = WalletSqliteDatabase::new(&path)
+    let db = WalletSqliteDatabase::new(SqliteConfig::file(&path).expect("valid path"))
         .await
         .expect("reopen wallet");
     assert!(db

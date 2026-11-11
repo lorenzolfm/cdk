@@ -11,7 +11,7 @@ use cdk_sql_common::database::{DatabaseConnector, DatabaseExecutor, DatabaseTran
 use cdk_sql_common::pool::{self, DatabaseConfig, DatabasePool};
 use cdk_sql_common::stmt::{Column, Statement};
 use cdk_sql_common::SQLWalletDatabase;
-use cdk_sqlite::SqliteConnectionManager;
+use cdk_sqlite::{SqliteConfig, SqliteConnectionManager};
 use tokio::sync::oneshot;
 
 use crate::wallet::test_utils::{
@@ -21,7 +21,6 @@ use crate::wallet::test_utils::{
 use crate::Amount;
 
 type Sqlite = <SqliteConnectionManager as DatabasePool>::Connection;
-type SqliteConfig = <SqliteConnectionManager as DatabasePool>::Config;
 type SqliteTransaction = <Sqlite as DatabaseConnector>::Transaction;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,7 +186,7 @@ async fn check_cancellation(preparation: Preparation, proof_amount: u64) {
         let gate = Arc::new(Mutex::new(None));
         let db = Arc::new(
             SQLWalletDatabase::<Manager>::new(Config {
-                sqlite: Arc::new(SqliteConfig::from(":memory:")),
+                sqlite: Arc::new(SqliteConfig::memory()),
                 gate: gate.clone(),
             })
             .await

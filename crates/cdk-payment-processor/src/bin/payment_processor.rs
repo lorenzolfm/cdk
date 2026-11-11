@@ -110,7 +110,9 @@ async fn main() -> anyhow::Result<()> {
                         percent_fee_reserve: cln_settings.fee_percent,
                     };
 
-                    let kv_store = Arc::new(MintSqliteDatabase::new(":memory:").await?);
+                    let kv_store = Arc::new(
+                        MintSqliteDatabase::new(cdk_sqlite::SqliteConfig::memory()).await?,
+                    );
                     Arc::new(
                         cdk_cln::Cln::new(cln_settings.rpc_path, fee_reserve, false, kv_store)
                             .await?
@@ -145,7 +147,9 @@ async fn main() -> anyhow::Result<()> {
                         percent_fee_reserve: lnd_settings.fee_percent,
                     };
 
-                    let kv_store = Arc::new(MintSqliteDatabase::new(":memory:").await?);
+                    let kv_store = Arc::new(
+                        MintSqliteDatabase::new(cdk_sqlite::SqliteConfig::memory()).await?,
+                    );
                     Arc::new(
                         cdk_lnd::Lnd::new(
                             lnd_settings.address,

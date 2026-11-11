@@ -7,7 +7,7 @@ use cdk_sql_common::stmt::query;
 use rusqlite::Connection;
 
 use super::TestDirectory;
-use crate::common::{Config, SqliteConnectionManager};
+use crate::common::{SqliteConfig, SqliteConnectionManager};
 
 #[tokio::test(flavor = "current_thread")]
 async fn contended_sqlite_write_leaves_executor_available_to_release_holder() {
@@ -17,7 +17,7 @@ async fn contended_sqlite_write_leaves_executor_available_to_release_holder() {
     // settings. Both connections are created before taking the write lock.
     let connection = Arc::new(
         SqliteConnectionManager::new_resource(
-            &Config::from(&path),
+            &SqliteConfig::file(&path).expect("valid path"),
             Arc::new(AtomicBool::new(false)),
             Duration::from_secs(5),
         )

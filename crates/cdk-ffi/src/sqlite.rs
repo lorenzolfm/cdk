@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use cdk_common::database::{Error as CdkDatabaseError, WalletDatabase as CdkWalletDatabase};
 use cdk_sqlite::wallet::WalletSqliteDatabase as CdkWalletSqliteDatabase;
+use cdk_sqlite::SqliteConfig;
 
 use crate::{
     CurrencyUnit, FfiError, FfiWalletDatabaseWrapper, Id, KeySet, KeySetInfo, Keys, MeltQuote,
@@ -33,9 +34,10 @@ impl WalletSqliteDatabase {
     /// lifecycle transitions around write-capable wallet calls.
     #[uniffi::constructor]
     pub fn new(file_path: String) -> Result<Arc<Self>, FfiError> {
+        let config = sqlite_config(file_path)?;
         let rt = crate::runtime::RuntimeGuard::new().map_err(FfiError::internal)?;
         let db = rt
-            .block_on(async move { CdkWalletSqliteDatabase::new(file_path.as_str()).await })
+            .block_on(async move { CdkWalletSqliteDatabase::new(config).await })
             .map_err(FfiError::internal)?;
         Ok(Arc::new(Self {
             inner: FfiWalletDatabaseWrapper::new(db),
@@ -55,6 +57,14 @@ impl WalletSqliteDatabase {
             _runtime: rt,
         }))
     }
+}
+
+fn sqlite_config(file_path: String) -> Result<SqliteConfig, FfiError> {
+    if file_path.contains(":memory:") {
+        return Ok(SqliteConfig::memory());
+    }
+
+    SqliteConfig::file(file_path).map_err(FfiError::internal)
 }
 
 #[uniffi::export(async_runtime = "tokio")]

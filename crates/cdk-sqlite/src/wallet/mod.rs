@@ -27,7 +27,7 @@ mod tests {
     use cdk_common::nuts::{ProofDleq, State};
     use cdk_common::secret::Secret;
 
-    use crate::WalletSqliteDatabase;
+    use crate::{SqliteConfig, WalletSqliteDatabase};
 
     #[tokio::test]
     #[cfg(feature = "sqlcipher")]
@@ -39,9 +39,10 @@ mod tests {
         let path = std::env::temp_dir()
             .to_path_buf()
             .join(format!("cdk-test-{}.sqlite", uuid::Uuid::new_v4()));
-        let db = WalletSqliteDatabase::new((path, "password".to_string()))
-            .await
-            .unwrap();
+        let config = SqliteConfig::file(path)
+            .expect("valid path")
+            .with_password("password");
+        let db = WalletSqliteDatabase::new(config).await.unwrap();
 
         let mint_info = MintInfo::new().description("test");
         let mint_url = MintUrl::from_str("https://mint.xyz").unwrap();
@@ -67,13 +68,10 @@ mod tests {
             .to_path_buf()
             .join(format!("cdk-test-dleq-{}.sqlite", uuid::Uuid::new_v4()));
 
+        let config = SqliteConfig::file(path).expect("valid path");
         #[cfg(feature = "sqlcipher")]
-        let db = WalletSqliteDatabase::new((path, "password".to_string()))
-            .await
-            .unwrap();
-
-        #[cfg(not(feature = "sqlcipher"))]
-        let db = WalletSqliteDatabase::new(path).await.unwrap();
+        let config = config.with_password("password");
+        let db = WalletSqliteDatabase::new(config).await.unwrap();
 
         // Create a proof with DLEQ
         let keyset_id = Id::from_str("00deadbeef123456").unwrap();
@@ -148,13 +146,10 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
 
+        let config = SqliteConfig::file(path).expect("valid path");
         #[cfg(feature = "sqlcipher")]
-        let db = WalletSqliteDatabase::new((path, "password".to_string()))
-            .await
-            .unwrap();
-
-        #[cfg(not(feature = "sqlcipher"))]
-        let db = WalletSqliteDatabase::new(path).await.unwrap();
+        let config = config.with_password("password");
+        let db = WalletSqliteDatabase::new(config).await.unwrap();
 
         // Test PaymentMethod variants
         let mint_url = MintUrl::from_str("https://example.com").unwrap();
@@ -205,13 +200,10 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
 
+        let config = SqliteConfig::file(path).expect("valid path");
         #[cfg(feature = "sqlcipher")]
-        let db = WalletSqliteDatabase::new((path, "password".to_string()))
-            .await
-            .unwrap();
-
-        #[cfg(not(feature = "sqlcipher"))]
-        let db = WalletSqliteDatabase::new(path).await.unwrap();
+        let config = config.with_password("password");
+        let db = WalletSqliteDatabase::new(config).await.unwrap();
 
         let result = db.get_proofs_by_ys(vec![]).await;
         assert!(matches!(result, Err(Error::EmptyInClause(_))));
@@ -229,13 +221,10 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
 
+        let config = SqliteConfig::file(path).expect("valid path");
         #[cfg(feature = "sqlcipher")]
-        let db = WalletSqliteDatabase::new((path, "password".to_string()))
-            .await
-            .unwrap();
-
-        #[cfg(not(feature = "sqlcipher"))]
-        let db = WalletSqliteDatabase::new(path).await.unwrap();
+        let config = config.with_password("password");
+        let db = WalletSqliteDatabase::new(config).await.unwrap();
 
         let keyset_id = Id::from_str("00deadbeef123456").unwrap();
         let mint_url = MintUrl::from_str("https://example.com").unwrap();
@@ -302,13 +291,10 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
 
+        let config = SqliteConfig::file(path).expect("valid path");
         #[cfg(feature = "sqlcipher")]
-        let db = WalletSqliteDatabase::new((path, "password".to_string()))
-            .await
-            .unwrap();
-
-        #[cfg(not(feature = "sqlcipher"))]
-        let db = WalletSqliteDatabase::new(path).await.unwrap();
+        let config = config.with_password("password");
+        let db = WalletSqliteDatabase::new(config).await.unwrap();
 
         let mint_url = MintUrl::from_str("https://example.com").unwrap();
 
