@@ -13,6 +13,9 @@ use crate::async_sqlite;
 /// The config need to create a new SQLite connection
 pub struct Config {
     path: Option<String>,
+    /// SQLCipher key. Only builds with the `sqlcipher` feature can encrypt, so
+    /// only they can hold a key.
+    #[cfg(feature = "sqlcipher")]
     password: Option<String>,
     /// Set once the in-memory database has been opened. It lives only inside its
     /// single connection, so a second open means that connection was discarded.
@@ -23,6 +26,7 @@ impl Clone for Config {
     fn clone(&self) -> Self {
         Self {
             path: self.path.clone(),
+            #[cfg(feature = "sqlcipher")]
             password: self.password.clone(),
             // A cloned config describes a new pool with its own database.
             in_memory_opened: AtomicBool::new(false),
@@ -32,10 +36,11 @@ impl Clone for Config {
 
 impl fmt::Debug for Config {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Config")
-            .field("path", &self.path)
-            .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
-            .finish()
+        let mut debug = f.debug_struct("Config");
+        debug.field("path", &self.path);
+        #[cfg(feature = "sqlcipher")]
+        debug.field("password", &self.password.as_ref().map(|_| "[REDACTED]"));
+        debug.finish()
     }
 }
 
@@ -99,6 +104,7 @@ impl DatabasePool for SqliteConnectionManager {
             Connection::open_in_memory()?
         };
 
+        #[cfg(feature = "sqlcipher")]
         if let Some(password) = config.password.as_ref() {
             conn.pragma_update(None, "key", password)?;
         }
@@ -130,6 +136,7 @@ impl From<PathBuf> for Config {
     }
 }
 
+#[cfg(feature = "sqlcipher")]
 impl From<(PathBuf, String)> for Config {
     fn from((path, password): (PathBuf, String)) -> Self {
         (path.to_str().unwrap_or_default(), password.as_str()).into()
@@ -147,12 +154,14 @@ impl From<&str> for Config {
         if path.contains(":memory:") {
             Config {
                 path: None,
+                #[cfg(feature = "sqlcipher")]
                 password: None,
                 in_memory_opened: Default::default(),
             }
         } else {
             Config {
                 path: Some(path.to_owned()),
+                #[cfg(feature = "sqlcipher")]
                 password: None,
                 in_memory_opened: Default::default(),
             }
@@ -160,6 +169,7 @@ impl From<&str> for Config {
     }
 }
 
+#[cfg(feature = "sqlcipher")]
 impl From<(&str, &str)> for Config {
     fn from((path, pass): (&str, &str)) -> Self {
         if path.contains(":memory:") {
@@ -202,7 +212,7 @@ pub fn from_sqlite(v: rusqlite::types::Value) -> Value {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlcipher"))]
 mod tests {
     use super::Config;
 
