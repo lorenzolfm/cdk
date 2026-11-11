@@ -1021,20 +1021,17 @@ async fn setup_database(
 #[cfg(feature = "sqlite")]
 async fn setup_sqlite_database(
     work_dir: &Path,
-    _password: Option<String>,
+    password: Option<String>,
 ) -> Result<Arc<MintSqliteDatabase>> {
     let sql_db_path = work_dir.join("cdk-mintd.sqlite");
     tracing::info!("SQLite database path: {}", sql_db_path.display());
 
-    #[cfg(not(feature = "sqlcipher"))]
-    let db = MintSqliteDatabase::new(&sql_db_path).await?;
-    #[cfg(feature = "sqlcipher")]
-    let db = {
-        // Get password from command line arguments for sqlcipher
-        let password = _password
-            .ok_or_else(|| anyhow!("Password required when sqlcipher feature is enabled"))?;
-        tracing::info!("Using SQLCipher encryption for SQLite database");
-        MintSqliteDatabase::new((sql_db_path, password)).await?
+    let db = match password {
+        Some(password) => {
+            tracing::info!("Using SQLCipher encryption for SQLite database");
+            MintSqliteDatabase::new((sql_db_path, password)).await?
+        }
+        None => MintSqliteDatabase::new(&sql_db_path).await?,
     };
 
     tracing::info!("SQLite database initialized successfully");
@@ -1743,15 +1740,11 @@ async fn setup_authentication(
                 #[cfg(feature = "sqlite")]
                 {
                     let sql_db_path = _work_dir.join("cdk-mintd-auth.sqlite");
-                    #[cfg(not(feature = "sqlcipher"))]
-                    let sqlite_db = MintSqliteAuthDatabase::new(&sql_db_path).await?;
-                    #[cfg(feature = "sqlcipher")]
-                    let sqlite_db = {
-                        // Get password from command line arguments for sqlcipher
-                        let password = _password.clone().ok_or_else(|| {
-                            anyhow!("Password required when sqlcipher feature is enabled")
-                        })?;
-                        MintSqliteAuthDatabase::new((sql_db_path, password)).await?
+                    let sqlite_db = match _password.clone() {
+                        Some(password) => {
+                            MintSqliteAuthDatabase::new((sql_db_path, password)).await?
+                        }
+                        None => MintSqliteAuthDatabase::new(&sql_db_path).await?,
                     };
 
                     Arc::new(sqlite_db)
@@ -3175,9 +3168,6 @@ engine = "sqlite"
     #[cfg(all(feature = "sqlite", feature = "fakewallet"))]
     #[tokio::test]
     async fn existing_mint_import_verifies_keysets_instead_of_legacy_pubkey() {
-        #[cfg(feature = "sqlcipher")]
-        let password = Some("test-password".to_string());
-        #[cfg(not(feature = "sqlcipher"))]
         let password: Option<String> = None;
 
         let work_dir = crate::test_utils::unique_temp_path("legacy_mint_identity_import");
@@ -3294,9 +3284,6 @@ engine = "sqlite"
         let secret_path = work_dir.join("mnemonic.secret");
         fs::write(&secret_path, TEST_MNEMONIC).expect("write mnemonic secret");
 
-        #[cfg(feature = "sqlcipher")]
-        let password = Some("test-password".to_string());
-        #[cfg(not(feature = "sqlcipher"))]
         let password: Option<String> = None;
 
         let first = sqlite_configuration_document(&secret_path, "first-public");
@@ -3371,9 +3358,6 @@ engine = "sqlite"
         fs::write(&secret_path, TEST_MNEMONIC).expect("write mnemonic secret");
         let document = sqlite_configuration_document(&secret_path, "empty-existing");
 
-        #[cfg(feature = "sqlcipher")]
-        let password = Some("test-password".to_string());
-        #[cfg(not(feature = "sqlcipher"))]
         let password: Option<String> = None;
 
         let error = initialize_configuration(
@@ -3406,9 +3390,6 @@ engine = "sqlite"
         let document =
             sqlite_configuration_document(&secret_path, "existing").replace("mnemonic =", "seed =");
 
-        #[cfg(feature = "sqlcipher")]
-        let password = Some("test-password".to_string());
-        #[cfg(not(feature = "sqlcipher"))]
         let password: Option<String> = None;
 
         let bootstrap = load_database_bootstrap_settings().expect("bootstrap settings");
@@ -3464,9 +3445,6 @@ engine = "sqlite"
         fs::write(&secret_path, TEST_MNEMONIC).expect("write mnemonic secret");
         let document = sqlite_bdk_configuration_document(&secret_path, "existing-with-missing-bdk");
 
-        #[cfg(feature = "sqlcipher")]
-        let password = Some("test-password".to_string());
-        #[cfg(not(feature = "sqlcipher"))]
         let password: Option<String> = None;
 
         let bootstrap = load_database_bootstrap_settings().expect("bootstrap settings");
@@ -3706,8 +3684,8 @@ backend = "fakewallet"
 
         let args = CLIArgs {
             work_dir: None,
-            #[cfg(feature = "sqlcipher")]
-            password: Some("test-password".to_string()),
+            #[cfg(feature = "sqlite")]
+            password: None,
             config: Some(config_path),
             seed_file: Some(seed_file),
             enable_logging: false,

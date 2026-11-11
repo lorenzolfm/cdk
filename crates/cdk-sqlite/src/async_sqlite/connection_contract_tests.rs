@@ -20,12 +20,7 @@ fn in_memory() -> AsyncSqlite {
 }
 
 fn config_for(path: &str) -> Config {
-    #[cfg(not(feature = "sqlcipher"))]
-    let config: Config = path.into();
-    #[cfg(feature = "sqlcipher")]
-    let config: Config = (path, "test").into();
-
-    config
+    path.into()
 }
 
 /// Runs `writers` write transactions at once, each keeping the write lock for `statements`
@@ -216,8 +211,6 @@ fn closing_pool_completes_checkpoint_before_file_backup() {
         std::fs::copy(&path, &backup).unwrap();
 
         let connection = Connection::open(&backup).unwrap();
-        #[cfg(feature = "sqlcipher")]
-        connection.pragma_update(None, "key", "test").unwrap();
         let values: Vec<i64> = connection
             .prepare("SELECT id FROM data")
             .unwrap()

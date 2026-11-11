@@ -14,12 +14,7 @@ const CDK_MINT_CONFIG_KV_KEY: &str = "mint_info";
 
 /// Creates a new in-memory [`MintSqliteDatabase`] instance
 pub async fn empty() -> Result<MintSqliteDatabase, database::Error> {
-    #[cfg(not(feature = "sqlcipher"))]
-    let path = ":memory:";
-    #[cfg(feature = "sqlcipher")]
-    let path = (":memory:", "memory");
-
-    MintSqliteDatabase::new(path).await
+    MintSqliteDatabase::new(":memory:").await
 }
 
 /// Creates a new in-memory [`MintSqliteDatabase`] instance with the given state

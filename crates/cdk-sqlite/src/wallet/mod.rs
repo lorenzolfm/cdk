@@ -30,7 +30,6 @@ mod tests {
     use crate::WalletSqliteDatabase;
 
     #[tokio::test]
-    #[cfg(feature = "sqlcipher")]
     async fn test_sqlcipher() {
         use cdk_common::mint_url::MintUrl;
         use cdk_common::MintInfo;
@@ -39,7 +38,7 @@ mod tests {
         let path = std::env::temp_dir()
             .to_path_buf()
             .join(format!("cdk-test-{}.sqlite", uuid::Uuid::new_v4()));
-        let db = WalletSqliteDatabase::new((path, "password".to_string()))
+        let db = WalletSqliteDatabase::new((path.clone(), "password".to_string()))
             .await
             .unwrap();
 
@@ -53,6 +52,20 @@ mod tests {
         let res = db.get_mint(mint_url).await.unwrap();
         assert_eq!(mint_info, res.clone().unwrap());
         assert_eq!("test", &res.unwrap().description.unwrap());
+        drop(db);
+
+        // The file on disk is encrypted: it has no plaintext SQLite header, and
+        // it cannot be read without the password.
+        let header = std::fs::read(&path).unwrap();
+        assert!(!header.starts_with(b"SQLite format 3\0"));
+        let without_password = rusqlite::Connection::open(&path).unwrap();
+        assert!(without_password
+            .query_row("SELECT count(*) FROM sqlite_master", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .is_err());
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
@@ -67,12 +80,6 @@ mod tests {
             .to_path_buf()
             .join(format!("cdk-test-dleq-{}.sqlite", uuid::Uuid::new_v4()));
 
-        #[cfg(feature = "sqlcipher")]
-        let db = WalletSqliteDatabase::new((path, "password".to_string()))
-            .await
-            .unwrap();
-
-        #[cfg(not(feature = "sqlcipher"))]
         let db = WalletSqliteDatabase::new(path).await.unwrap();
 
         // Create a proof with DLEQ
@@ -148,12 +155,6 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
 
-        #[cfg(feature = "sqlcipher")]
-        let db = WalletSqliteDatabase::new((path, "password".to_string()))
-            .await
-            .unwrap();
-
-        #[cfg(not(feature = "sqlcipher"))]
         let db = WalletSqliteDatabase::new(path).await.unwrap();
 
         // Test PaymentMethod variants
@@ -205,12 +206,6 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
 
-        #[cfg(feature = "sqlcipher")]
-        let db = WalletSqliteDatabase::new((path, "password".to_string()))
-            .await
-            .unwrap();
-
-        #[cfg(not(feature = "sqlcipher"))]
         let db = WalletSqliteDatabase::new(path).await.unwrap();
 
         let result = db.get_proofs_by_ys(vec![]).await;
@@ -229,12 +224,6 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
 
-        #[cfg(feature = "sqlcipher")]
-        let db = WalletSqliteDatabase::new((path, "password".to_string()))
-            .await
-            .unwrap();
-
-        #[cfg(not(feature = "sqlcipher"))]
         let db = WalletSqliteDatabase::new(path).await.unwrap();
 
         let keyset_id = Id::from_str("00deadbeef123456").unwrap();
@@ -302,12 +291,6 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
 
-        #[cfg(feature = "sqlcipher")]
-        let db = WalletSqliteDatabase::new((path, "password".to_string()))
-            .await
-            .unwrap();
-
-        #[cfg(not(feature = "sqlcipher"))]
         let db = WalletSqliteDatabase::new(path).await.unwrap();
 
         let mint_url = MintUrl::from_str("https://example.com").unwrap();

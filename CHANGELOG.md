@@ -11,6 +11,10 @@
 
 - cashu: P2BK V4 tokens now encode `pe` as CBOR bytes. Wallets using CDK 0.16–0.18 must upgrade to receive these tokens. Updated wallets continue to accept legacy hex-encoded tokens (#2712).
 
+### Changed
+
+- cdk-sqlite/cdk-cli/cdk-mintd/cdk-signatory: **BREAKING** - SQLCipher is always enabled, built with a vendored OpenSSL, and the `sqlcipher` feature is removed. A database password now always encrypts the database; without a password the database is plaintext. Building needs `perl` and `make`; see the [v0.19 migration guide](docs/migrations/v0.19.md#sqlcipher-is-always-enabled-in-cdk-sqlite).
+
 ### Removed
 
 - cdk-common/cdk/cdk-ffi: **BREAKING** - Remove the shared `wallet::Wallet` trait and its forwarding implementations. Use concrete wallet methods instead; see the [v0.19 migration guide](docs/migrations/v0.19.md#wallet-trait-removal). The exported UniFFI API is unchanged.

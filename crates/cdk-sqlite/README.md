@@ -30,11 +30,16 @@ The FFI `WalletSqliteDatabase` also exposes async `close()` with the same semant
 
 The following crate feature flags are available:
 
-| Feature     | Default | Description                        |
-|-------------|:-------:|------------------------------------|
-| `wallet`    |   Yes   | Enable cashu wallet features       |
-| `mint`      |   Yes   | Enable cashu mint wallet features  |
-| `sqlcipher` |   No    | Enable encrypted database          |
+| Feature  | Default | Description                       |
+|----------|:-------:|-----------------------------------|
+| `wallet` |   Yes   | Enable cashu wallet features      |
+| `mint`   |   Yes   | Enable cashu mint wallet features |
+
+## Encryption
+
+The crate always links SQLCipher, with OpenSSL compiled in, so a build needs no
+system OpenSSL. Open a database with a `(path, password)` pair to encrypt it with
+that password; open it with a path alone for a plaintext database.
 
 ## Installation
 

@@ -12,7 +12,6 @@ readme = "README.md"
 
 [features]
 default = ["npubcash"]
-sqlcipher = ["cdk-sqlite/sqlcipher"]
 # MSRV is not tracked with redb enabled
 redb = ["dep:cdk-redb"]
 tor = ["cdk/tor"]
