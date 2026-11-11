@@ -10,6 +10,7 @@
 ### Fixed
 
 - cashu: P2BK V4 tokens now encode `pe` as CBOR bytes. Wallets using CDK 0.16–0.18 must upgrade to receive these tokens. Updated wallets continue to accept legacy hex-encoded tokens (#2712).
+- cdk-sqlite: **BREAKING** - The `(path, password)` conversions for SQLite databases now require the `sqlcipher` feature. Builds without it no longer compile a password argument; see the [v0.19 migration guide](docs/migrations/v0.19.md#sqlcipher-password-requires-the-sqlcipher-feature).
 
 ### Removed
 

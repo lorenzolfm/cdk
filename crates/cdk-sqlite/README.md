@@ -34,7 +34,7 @@ The following crate feature flags are available:
 |-------------|:-------:|------------------------------------|
 | `wallet`    |   Yes   | Enable cashu wallet features       |
 | `mint`      |   Yes   | Enable cashu mint wallet features  |
-| `sqlcipher` |   No    | Enable encrypted database          |
+| `sqlcipher` |   No    | Enable encrypted database; required to pass a database password |
 
 ## Installation
 
