@@ -29,6 +29,13 @@ pub struct WalletSqliteDatabase {
 impl WalletSqliteDatabase {
     /// Create a new SQLite wallet database at `file_path`.
     ///
+    /// `file_path` is a filesystem path and must not be empty. A relative path
+    /// is resolved against the current directory once, when the database is
+    /// created, so a later change of directory does not move it. Passing
+    /// `":memory:"` still opens an in-memory database but is deprecated: a
+    /// future release will open a file of that name. Use
+    /// [`WalletSqliteDatabase::new_in_memory`] instead.
+    ///
     /// Wallet operations may later write to this database. Mobile hosts are
     /// responsible for choosing a durable file location and coordinating app
     /// lifecycle transitions around write-capable wallet calls.
@@ -59,8 +66,16 @@ impl WalletSqliteDatabase {
     }
 }
 
+/// The path that used to select an in-memory database.
+const DEPRECATED_IN_MEMORY_PATH: &str = ":memory:";
+
 fn sqlite_config(file_path: String) -> Result<SqliteConfig, FfiError> {
-    if file_path.contains(":memory:") {
+    if file_path == DEPRECATED_IN_MEMORY_PATH {
+        tracing::warn!(
+            "Opening SQLite path \":memory:\" as an in-memory database is deprecated; \
+             a future release will open a file of that name. \
+             Use WalletSqliteDatabase::new_in_memory() instead"
+        );
         return Ok(SqliteConfig::memory());
     }
 
@@ -80,3 +95,20 @@ impl WalletSqliteDatabase {
 
 // Use macro to implement WalletDatabase trait - delegates all methods to inner
 crate::impl_ffi_wallet_database!(WalletSqliteDatabase);
+
+#[cfg(test)]
+mod tests {
+    use super::WalletSqliteDatabase;
+
+    #[test]
+    fn empty_path_is_rejected() {
+        assert!(WalletSqliteDatabase::new(String::new()).is_err());
+    }
+
+    #[test]
+    fn deprecated_memory_path_opens_in_memory() {
+        let dir = std::env::current_dir().expect("current directory");
+        WalletSqliteDatabase::new(":memory:".to_owned()).expect("in-memory database");
+        assert!(!dir.join(":memory:").exists());
+    }
+}
