@@ -987,7 +987,7 @@ mod tests {
     async fn test_with_auth_protected_endpoints_are_enforced_and_advertised() {
         let (builder, localstore) = builder_with_bolt11_processor().await;
         let auth_db = Arc::new(
-            MintSqliteAuthDatabase::new(":memory:")
+            MintSqliteAuthDatabase::new(cdk_sqlite::SqliteConfig::memory())
                 .await
                 .expect("auth db"),
         );
@@ -1025,7 +1025,7 @@ mod tests {
     async fn test_with_blind_auth_protected_endpoints_are_enforced_and_advertised() {
         let (builder, localstore) = builder_with_bolt11_processor().await;
         let auth_db = Arc::new(
-            MintSqliteAuthDatabase::new(":memory:")
+            MintSqliteAuthDatabase::new(cdk_sqlite::SqliteConfig::memory())
                 .await
                 .expect("auth db"),
         );

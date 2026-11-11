@@ -7,6 +7,7 @@ use cdk_common::nuts::{CurrencyUnit, Id, Proofs, State};
 use cdk_common::MintInfo;
 
 use super::MintSqliteDatabase;
+use crate::SqliteConfig;
 
 const CDK_MINT_PRIMARY_NAMESPACE: &str = "cdk_mint";
 const CDK_MINT_CONFIG_SECONDARY_NAMESPACE: &str = "config";
@@ -14,12 +15,7 @@ const CDK_MINT_CONFIG_KV_KEY: &str = "mint_info";
 
 /// Creates a new in-memory [`MintSqliteDatabase`] instance
 pub async fn empty() -> Result<MintSqliteDatabase, database::Error> {
-    #[cfg(not(feature = "sqlcipher"))]
-    let path = ":memory:";
-    #[cfg(feature = "sqlcipher")]
-    let path = (":memory:", "memory");
-
-    MintSqliteDatabase::new(path).await
+    MintSqliteDatabase::new(SqliteConfig::memory()).await
 }
 
 /// Creates a new in-memory [`MintSqliteDatabase`] instance with the given state

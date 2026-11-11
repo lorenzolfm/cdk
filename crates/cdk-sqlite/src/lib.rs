@@ -3,7 +3,7 @@
 mod async_sqlite;
 mod common;
 
-pub use common::SqliteConnectionManager;
+pub use common::{SqliteConfig, SqliteConfigError, SqliteConnectionManager};
 
 #[cfg(feature = "mint")]
 pub mod mint;

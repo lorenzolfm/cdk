@@ -13,7 +13,7 @@ use cdk::cdk_database::WalletDatabase;
 use cdk::nuts::CurrencyUnit;
 #[cfg(feature = "redb")]
 use cdk_redb::WalletRedbDatabase;
-use cdk_sqlite::WalletSqliteDatabase;
+use cdk_sqlite::{SqliteConfig, WalletSqliteDatabase};
 #[cfg(all(feature = "tor", not(target_arch = "wasm32")))]
 use clap::ValueEnum;
 use clap::{Parser, Subcommand};
@@ -176,15 +176,13 @@ async fn main() -> Result<()> {
         match args.engine.as_str() {
             "sqlite" => {
                 let sql_path = work_dir.join("cdk-cli.sqlite");
-                #[cfg(not(feature = "sqlcipher"))]
-                let sql = WalletSqliteDatabase::new(&sql_path).await?;
+                let config = SqliteConfig::file(sql_path)?;
                 #[cfg(feature = "sqlcipher")]
-                let sql = {
-                    match args.password {
-                        Some(pass) => WalletSqliteDatabase::new((sql_path, pass)).await?,
-                        None => bail!("Missing database password"),
-                    }
+                let config = match args.password {
+                    Some(pass) => config.with_password(pass),
+                    None => bail!("Missing database password"),
                 };
+                let sql = WalletSqliteDatabase::new(config).await?;
 
                 Arc::new(sql)
             }

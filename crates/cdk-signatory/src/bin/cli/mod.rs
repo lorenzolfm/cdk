@@ -13,7 +13,7 @@ use {
     cdk_common::database::MintKeysDatabase,
     cdk_common::CurrencyUnit,
     cdk_signatory::{db_signatory, start_grpc_server},
-    cdk_sqlite::MintSqliteDatabase,
+    cdk_sqlite::{MintSqliteDatabase, SqliteConfig},
     std::collections::HashMap,
     std::net::SocketAddr,
     std::str::FromStr,
@@ -130,15 +130,13 @@ pub async fn cli_main() -> Result<()> {
         match args.engine.as_str() {
             "sqlite" => {
                 let sql_path = work_dir.join("cdk-cli.sqlite");
-                #[cfg(not(feature = "sqlcipher"))]
-                let db = MintSqliteDatabase::new(&sql_path).await?;
+                let config = SqliteConfig::file(&sql_path)?;
                 #[cfg(feature = "sqlcipher")]
-                let db = {
-                    match args.password {
-                        Some(pass) => MintSqliteDatabase::new((sql_path.clone(), pass)).await?,
-                        None => bail!("Missing database password"),
-                    }
+                let config = match args.password {
+                    Some(pass) => config.with_password(pass),
+                    None => bail!("Missing database password"),
                 };
+                let db = MintSqliteDatabase::new(config).await?;
 
                 Arc::new(db)
             }

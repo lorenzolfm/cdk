@@ -411,9 +411,9 @@ pub async fn create_mint_with_fee(fee_ppk: u64) -> Result<Mint> {
         _ => {
             // Create a temporary directory for SQLite database
             let temp_dir = create_temp_dir("cdk-test-sqlite-mint")?;
-            let path = temp_dir.join("mint.db").to_str().unwrap().to_string();
+            let config = cdk_sqlite::SqliteConfig::file(temp_dir.join("mint.db"))?;
             Arc::new(
-                cdk_sqlite::MintSqliteDatabase::new(path.as_str())
+                cdk_sqlite::MintSqliteDatabase::new(config)
                     .await
                     .expect("Could not create sqlite db"),
             )
@@ -495,9 +495,9 @@ pub async fn create_mint_with_limits(limits: Option<(usize, usize)>) -> Result<M
         _ => {
             // Create a temporary directory for SQLite database
             let temp_dir = create_temp_dir("cdk-test-sqlite-mint")?;
-            let path = temp_dir.join("mint.db").to_str().unwrap().to_string();
+            let config = cdk_sqlite::SqliteConfig::file(temp_dir.join("mint.db"))?;
             Arc::new(
-                cdk_sqlite::MintSqliteDatabase::new(path.as_str())
+                cdk_sqlite::MintSqliteDatabase::new(config)
                     .await
                     .expect("Could not create sqlite db"),
             )
@@ -602,8 +602,8 @@ pub async fn create_test_wallet_for_mint_with_seed(mint: Mint, seed: [u8; 64]) -
             "sqlite" => {
                 // Create a temporary directory for SQLite database
                 let temp_dir = create_temp_dir("cdk-test-sqlite-wallet")?;
-                let path = temp_dir.join("wallet.db").to_str().unwrap().to_string();
-                let database = cdk_sqlite::WalletSqliteDatabase::new(path.as_str())
+                let config = cdk_sqlite::SqliteConfig::file(temp_dir.join("wallet.db"))?;
+                let database = cdk_sqlite::WalletSqliteDatabase::new(config)
                     .await
                     .expect("Could not create sqlite db");
                 Arc::new(database)

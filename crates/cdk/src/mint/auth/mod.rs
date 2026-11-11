@@ -237,7 +237,7 @@ mod tests {
     async fn create_auth_enabled_mint() -> Mint {
         let db = Arc::new(cdk_sqlite::mint::memory::empty().await.expect("mint db"));
         let auth_db = Arc::new(
-            cdk_sqlite::mint::MintSqliteAuthDatabase::new(":memory:")
+            cdk_sqlite::mint::MintSqliteAuthDatabase::new(cdk_sqlite::SqliteConfig::memory())
                 .await
                 .expect("auth db"),
         );

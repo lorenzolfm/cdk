@@ -10,7 +10,7 @@ use tokio::time::sleep;
 
 use super::tests::TestDirectory;
 use super::*;
-use crate::common::{Config, SqliteConnectionManager};
+use crate::common::{SqliteConfig, SqliteConnectionManager};
 
 fn in_memory() -> AsyncSqlite {
     AsyncSqlite::new(
@@ -19,11 +19,10 @@ fn in_memory() -> AsyncSqlite {
     )
 }
 
-fn config_for(path: &str) -> Config {
-    #[cfg(not(feature = "sqlcipher"))]
-    let config: Config = path.into();
+fn config_for(path: &str) -> SqliteConfig {
+    let config = SqliteConfig::file(path).expect("valid path");
     #[cfg(feature = "sqlcipher")]
-    let config: Config = (path, "test").into();
+    let config = config.with_password("test");
 
     config
 }
