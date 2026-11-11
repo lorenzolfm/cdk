@@ -79,8 +79,9 @@ struct Cli {
     #[arg(short, long, default_value = "sqlite")]
     engine: String,
     /// Database password for sqlcipher
+    #[cfg(feature = "sqlcipher")]
     #[arg(long)]
-    password: Option<String>,
+    password: Option<cdk_sqlite::SqlcipherKey>,
     /// Path to working dir
     #[arg(short, long)]
     work_dir: Option<PathBuf>,

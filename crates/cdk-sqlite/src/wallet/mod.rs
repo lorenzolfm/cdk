@@ -39,9 +39,10 @@ mod tests {
         let path = std::env::temp_dir()
             .to_path_buf()
             .join(format!("cdk-test-{}.sqlite", uuid::Uuid::new_v4()));
-        let db = WalletSqliteDatabase::new((path, "password".to_string()))
-            .await
-            .unwrap();
+        let db =
+            WalletSqliteDatabase::new((path.clone(), "password".parse().expect("non-empty key")))
+                .await
+                .unwrap();
 
         let mint_info = MintInfo::new().description("test");
         let mint_url = MintUrl::from_str("https://mint.xyz").unwrap();
@@ -53,6 +54,16 @@ mod tests {
         let res = db.get_mint(mint_url).await.unwrap();
         assert_eq!(mint_info, res.clone().unwrap());
         assert_eq!("test", &res.unwrap().description.unwrap());
+
+        drop(db);
+        let header = std::fs::read(&path).unwrap();
+        assert!(header.len() >= 16, "database file has no header");
+        assert_ne!(
+            &header[..16],
+            b"SQLite format 3\0",
+            "database file is not encrypted"
+        );
+        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
@@ -68,7 +79,7 @@ mod tests {
             .join(format!("cdk-test-dleq-{}.sqlite", uuid::Uuid::new_v4()));
 
         #[cfg(feature = "sqlcipher")]
-        let db = WalletSqliteDatabase::new((path, "password".to_string()))
+        let db = WalletSqliteDatabase::new((path, "password".parse().expect("non-empty key")))
             .await
             .unwrap();
 
@@ -149,7 +160,7 @@ mod tests {
         ));
 
         #[cfg(feature = "sqlcipher")]
-        let db = WalletSqliteDatabase::new((path, "password".to_string()))
+        let db = WalletSqliteDatabase::new((path, "password".parse().expect("non-empty key")))
             .await
             .unwrap();
 
@@ -206,7 +217,7 @@ mod tests {
         ));
 
         #[cfg(feature = "sqlcipher")]
-        let db = WalletSqliteDatabase::new((path, "password".to_string()))
+        let db = WalletSqliteDatabase::new((path, "password".parse().expect("non-empty key")))
             .await
             .unwrap();
 
@@ -230,7 +241,7 @@ mod tests {
         ));
 
         #[cfg(feature = "sqlcipher")]
-        let db = WalletSqliteDatabase::new((path, "password".to_string()))
+        let db = WalletSqliteDatabase::new((path, "password".parse().expect("non-empty key")))
             .await
             .unwrap();
 
@@ -303,7 +314,7 @@ mod tests {
         ));
 
         #[cfg(feature = "sqlcipher")]
-        let db = WalletSqliteDatabase::new((path, "password".to_string()))
+        let db = WalletSqliteDatabase::new((path, "password".parse().expect("non-empty key")))
             .await
             .unwrap();
 
