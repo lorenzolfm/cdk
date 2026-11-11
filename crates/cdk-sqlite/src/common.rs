@@ -1,8 +1,8 @@
-use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use std::{fmt, io};
 
 use cdk_sql_common::pool::{self, DatabasePool};
 use cdk_sql_common::value::Value;
@@ -11,14 +11,30 @@ use rusqlite::{ffi, Connection};
 use crate::async_sqlite;
 
 /// Error returned when a [`SqliteConfig`] cannot be built
+///
+/// The variants differ between platforms, so a `match` needs a wildcard arm.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum SqliteConfigError {
     /// The database file path is empty
     #[error("SQLite database path is empty")]
     EmptyPath,
+    /// A relative path could not be resolved against the current directory
+    #[error("cannot resolve the SQLite database path against the current directory: {kind}")]
+    CurrentDir {
+        /// Why the current directory could not be read
+        kind: io::ErrorKind,
+    },
+    /// The path contains a NUL byte, which SQLite cannot receive
+    #[error("SQLite database path contains a NUL byte")]
+    NulByte,
+    /// The path is not valid Unicode, which SQLite requires on this platform
+    #[cfg(not(unix))]
+    #[error("SQLite database path is not valid Unicode")]
+    NotUnicode,
 }
 
-/// A non-empty path to the database file.
+/// An absolute path that SQLite reads as exactly that file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DatabaseFile(PathBuf);
 
@@ -28,7 +44,25 @@ impl DatabaseFile {
             return Err(SqliteConfigError::EmptyPath);
         }
 
-        Ok(Self(path))
+        // SQLite resolves a relative name against the current directory at every
+        // open, so a pool would follow a later directory change to another file.
+        // An absolute name is also never `:memory:` and never starts with
+        // `file:`, the two spellings SQLite gives another meaning.
+        let name = std::path::absolute(&path)
+            .map_err(|error| SqliteConfigError::CurrentDir { kind: error.kind() })?;
+        debug_assert!(name.is_absolute());
+
+        // rusqlite hands SQLite a C string: Unix passes the raw bytes, other
+        // platforms pass UTF-8.
+        if name.as_os_str().as_encoded_bytes().contains(&0) {
+            return Err(SqliteConfigError::NulByte);
+        }
+        #[cfg(not(unix))]
+        if name.to_str().is_none() {
+            return Err(SqliteConfigError::NotUnicode);
+        }
+
+        Ok(Self(name))
     }
 
     /// The name handed to SQLite.
@@ -87,6 +121,11 @@ pub struct SqliteConfig {
 
 impl SqliteConfig {
     /// A database stored in the file at `path`.
+    ///
+    /// The path is always a filesystem path: `:memory:` and `file:` URIs name
+    /// files of that name in the current directory. A relative path is
+    /// resolved against the current directory once, here, so a later change of
+    /// directory does not move the database.
     pub fn file<P>(path: P) -> Result<Self, SqliteConfigError>
     where
         P: Into<PathBuf>,
@@ -152,14 +191,23 @@ fn cant_open(message: &str) -> pool::Error<rusqlite::Error> {
 fn open_file(file: &DatabaseFile) -> Result<Connection, pool::Error<rusqlite::Error>> {
     let name = file.sqlite_name();
     if let Some(parent) = name.parent() {
-        if !parent.as_os_str().is_empty() && !parent.exists() {
+        if !parent.exists() {
             return Err(pool::Error::Resource(rusqlite::Error::InvalidPath(
                 name.to_path_buf(),
             )));
         }
     }
 
-    Ok(Connection::open(name)?)
+    let conn = Connection::open(name)?;
+
+    // SQLite reports an empty file name for a temporary or in-memory database.
+    // Such a database is private to this connection, so the pool's other
+    // connections would each see a different one.
+    if conn.path() == Some("") {
+        return Err(cant_open("SQLite did not open the database file on disk"));
+    }
+
+    Ok(conn)
 }
 
 /// Sqlite connection manager
@@ -250,7 +298,7 @@ pub fn from_sqlite(v: rusqlite::types::Value) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{SqliteConfig, SqliteConfigError};
+    use super::{DatabaseFile, SqliteConfig, SqliteConfigError};
 
     #[test]
     fn config_debug_redacts_sqlcipher_password() {
@@ -271,6 +319,35 @@ mod tests {
         assert_eq!(
             SqliteConfig::file("").map(|_| ()),
             Err(SqliteConfigError::EmptyPath)
+        );
+    }
+
+    #[test]
+    fn relative_paths_resolve_against_the_current_directory() {
+        let dir = std::env::current_dir().expect("current directory");
+        for path in [
+            "wallet.sqlite",
+            ":memory:",
+            "file:wallet.sqlite?mode=memory",
+            "data/wallet.sqlite",
+        ] {
+            let file = DatabaseFile::new(path.into()).expect("valid path");
+            assert_eq!(file.sqlite_name(), dir.join(path));
+        }
+    }
+
+    #[test]
+    fn absolute_paths_are_unchanged() {
+        let path = std::env::temp_dir().join("wallet:memory:.sqlite");
+        let file = DatabaseFile::new(path.clone()).expect("valid path");
+        assert_eq!(file.sqlite_name(), path);
+    }
+
+    #[test]
+    fn nul_byte_is_rejected() {
+        assert_eq!(
+            SqliteConfig::file("wallet\0.sqlite").map(|_| ()),
+            Err(SqliteConfigError::NulByte)
         );
     }
 }
