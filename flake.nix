@@ -291,6 +291,8 @@
           nativeBuildInputs = with pkgs; [
             pkg-config
             protobuf
+            # cdk-sqlite builds SQLCipher against a vendored OpenSSL.
+            perl
           ];
 
           buildInputs =
@@ -386,6 +388,8 @@
                   pkg-config
                   protobuf
                   muslCC
+                  # cdk-sqlite builds SQLCipher against a vendored OpenSSL.
+                  perl
                 ];
 
                 # Target-side libraries (musl static libs linked into the binary)
@@ -850,9 +854,7 @@
             "-p cdk-sql-common --no-default-features --features mint"
             "-p cdk-redb"
             "-p cdk-sqlite"
-            "-p cdk-sqlite --features sqlcipher"
             "-p cdk-cli"
-            "-p cdk-cli --features sqlcipher"
             "-p cdk-cli --features redb"
           ];
 
@@ -872,7 +874,6 @@
           "mintd-main" = [
             "-p cdk-mintd"
             "-p cdk-mintd --features redis"
-            "-p cdk-mintd --features sqlcipher"
             "-p cdk-signatory"
             "-p cdk-mint-rpc"
             "-p cdk-prometheus"
@@ -937,6 +938,8 @@
             jq
             just
             protobuf
+            # cdk-sqlite builds SQLCipher against a vendored OpenSSL.
+            perl
             buf
             nixpkgs-fmt
             typos
@@ -1632,7 +1635,6 @@
                 pname = "cdk-pr-feature-tests";
                 cargoArtifacts = workspaceDeps;
                 buildPhaseCargoCommand = ''
-                  cargo test --lib -p cdk-sqlite --features sqlcipher
                   cargo test --bins -p cdk-cli --features redb
                   cargo check -p cdk-mintd --features redis
                   cargo test --lib -p cdk-common --no-default-features --features wallet

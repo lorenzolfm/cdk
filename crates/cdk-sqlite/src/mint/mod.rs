@@ -123,15 +123,8 @@ mod test {
             uuid::Uuid::new_v4()
         ));
 
-        #[cfg(not(feature = "sqlcipher"))]
         let db = Arc::new(
             MintSqliteAuthDatabase::new(&path)
-                .await
-                .expect("auth database"),
-        );
-        #[cfg(feature = "sqlcipher")]
-        let db = Arc::new(
-            MintSqliteAuthDatabase::new((path.clone(), "test".to_owned()))
                 .await
                 .expect("auth database"),
         );
@@ -171,10 +164,7 @@ mod test {
 
         {
             let _ = remove_file(&file);
-            #[cfg(not(feature = "sqlcipher"))]
             let config: Config = file.as_str().into();
-            #[cfg(feature = "sqlcipher")]
-            let config: Config = (file.as_str(), "test").into();
 
             let pool = Pool::<SqliteConnectionManager>::new(config);
 
@@ -187,11 +177,7 @@ mod test {
                 .expect("create former db failed");
         }
 
-        #[cfg(not(feature = "sqlcipher"))]
         let conn = MintSqliteDatabase::new(file.as_str()).await;
-
-        #[cfg(feature = "sqlcipher")]
-        let conn = MintSqliteDatabase::new((file.as_str(), "test")).await;
 
         assert!(conn.is_ok(), "Failed with {:?}", conn.unwrap_err());
 

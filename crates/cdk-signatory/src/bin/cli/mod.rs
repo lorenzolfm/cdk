@@ -78,7 +78,7 @@ struct Cli {
     /// Database engine to use (sqlite/redb)
     #[arg(short, long, default_value = "sqlite")]
     engine: String,
-    /// Database password for sqlcipher
+    /// Database password. When set, the SQLite database is encrypted with it.
     #[arg(long)]
     password: Option<String>,
     /// Path to working dir
@@ -130,14 +130,9 @@ pub async fn cli_main() -> Result<()> {
         match args.engine.as_str() {
             "sqlite" => {
                 let sql_path = work_dir.join("cdk-cli.sqlite");
-                #[cfg(not(feature = "sqlcipher"))]
-                let db = MintSqliteDatabase::new(&sql_path).await?;
-                #[cfg(feature = "sqlcipher")]
-                let db = {
-                    match args.password {
-                        Some(pass) => MintSqliteDatabase::new((sql_path.clone(), pass)).await?,
-                        None => bail!("Missing database password"),
-                    }
+                let db = match args.password {
+                    Some(pass) => MintSqliteDatabase::new((sql_path, pass)).await?,
+                    None => MintSqliteDatabase::new(&sql_path).await?,
                 };
 
                 Arc::new(db)

@@ -12,7 +12,6 @@ license.workspace = true
 [features]
 default = ["grpc", "sqlite"]
 sqlite = ["cdk-sqlite"]
-sqlcipher = ["cdk-sqlite/sqlcipher"]
 grpc = ["dep:tonic", "tokio/full", "dep:tonic-prost", "dep:tonic-prost-build", "dep:prost"]
 
 [dependencies]

@@ -12,12 +12,12 @@ pub struct CLIArgs {
         required = false
     )]
     pub work_dir: Option<PathBuf>,
-    #[cfg(feature = "sqlcipher")]
+    #[cfg(feature = "sqlite")]
     #[arg(
         short,
         long,
         global = true,
-        help = "Database password for SQLCipher (required when opening an encrypted database)"
+        help = "Database password; when set, the SQLite databases are encrypted with it (required to open an encrypted database)"
     )]
     pub password: Option<String>,
     #[arg(

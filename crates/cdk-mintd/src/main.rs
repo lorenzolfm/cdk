@@ -39,10 +39,10 @@ fn main() -> Result<()> {
             Some(get_work_directory(&args).await?)
         };
 
-        #[cfg(feature = "sqlcipher")]
+        #[cfg(feature = "sqlite")]
         let password = args.password.clone();
 
-        #[cfg(not(feature = "sqlcipher"))]
+        #[cfg(not(feature = "sqlite"))]
         let password = None;
         let legacy_seed_file = args.seed_file.clone();
 

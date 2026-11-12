@@ -55,9 +55,6 @@ cargo build --bin cdk-cli --release
 # With Tor support
 cargo build --bin cdk-cli --release --features tor
 
-# With SQLCipher encryption
-cargo build --bin cdk-cli --release --features sqlcipher
-
 # With Redb database
 cargo build --bin cdk-cli --release --features redb
 
@@ -454,9 +451,9 @@ The CLI supports multiple database backends:
 cdk-cli --engine sqlite balance
 ```
 
-#### SQLCipher (encrypted SQLite)
+#### Encrypted SQLite
 ```bash
-# Requires building with --features sqlcipher
+# The SQLite database is encrypted with the password (SQLCipher)
 cdk-cli --engine sqlite --password mypassword balance
 ```
 
